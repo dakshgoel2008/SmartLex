@@ -1,0 +1,11 @@
+{
+  "num_processes": 8,
+  "top_keywords": 150,
+  "autocomplete_words": 100,
+  "supported_formats": [
+    ".pdf",
+    ".docx"
+  ],
+  "index_folder": "all",
+  "output_file": "output.json"
+}

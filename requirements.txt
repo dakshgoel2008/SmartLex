@@ -1,0 +1,14 @@
+PyQt5==5.15.9
+PyMuPDF==1.23.8
+rake-nltk==1.0.6
+nltk==3.8.1
+python-docx==1.1.0
+
+tqdm==4.66.1  
+watchdog==3.0.0  
+
+pytest==7.4.3
+pytest-qt==4.2.0
+
+# pytesseract==0.3.10
+# Pillow==10.1.0
