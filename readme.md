@@ -223,4 +223,9 @@ lexical-search-engine/
 ![Initial Window](images/Initial_Window.png)
 
 ### 📄 Output Window
+
 ![Output Window](images/Output_Window.png)
+
+### Future enhancement
+- Working on to add support for additional file types such as TXT, CSV, XLSX, PPTX, HTML, etc.
+- Currently working on similar functionality for images, audios etc.
