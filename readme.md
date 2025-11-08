@@ -2,26 +2,26 @@
 
 ## A powerful desktop search application that searches **inside** PDF and Word documents based on content keywords given by the user.
 
-## ✨ Features
+##  Features
 
 ### Core Features
 
--   🔎 **Content-based search**: Find documents by keywords inside them
--   📄 **Multi-format support**: PDF and DOCX files
--   ⚡ **Fast search**: ~0.02 seconds after initial indexing
--   🎯 **Smart ranking**: Results sorted by relevance
--   🔤 **Auto-complete**: Suggests keywords as you type
+-    **Content-based search**: Find documents by keywords inside them
+-    **Multi-format support**: PDF and DOCX files
+-    **Fast search**: ~0.02 seconds after initial indexing
+-    **Smart ranking**: Results sorted by relevance
+-    **Auto-complete**: Suggests keywords as you type
 
 ### Enhanced Features (New)
 
--   📊 **Progress tracking**: Visual feedback during indexing
--   🔧 **Configurable settings**: Easy customization via config.json
--   📝 **Logging**: Detailed logs for debugging
--   🔄 **Parallel processing**: Uses 8 cores for faster indexing
+-    **Progress tracking**: Visual feedback during indexing
+-    **Configurable settings**: Easy customization via config.json
+-    **Logging**: Detailed logs for debugging
+-    **Parallel processing**: Uses 8 cores for faster indexing
 
 ---
 
-## 🚀 Installation
+##  Installation
 
 ### Method 1: Automated Setup (Recommended)
 
@@ -64,7 +64,7 @@ mkdir all logs backups
 
 ---
 
-## 📖 Usage
+##  Usage
 
 ### First Run (Indexing)
 
@@ -110,7 +110,7 @@ python searchEngine.py
 
 ---
 
-## 🔬 How It Works
+##  How It Works
 
 ### Architecture
 
@@ -122,13 +122,13 @@ User Query → RAKE Extraction → Keyword Matching → Ranking → Results
 
 ### Step-by-Step Process
 
-#### 1️⃣ **File Collection** (First Run Only)
+#### 1️ **File Collection** (First Run Only)
 
 -   Batch script scans entire system
 -   Finds all PDF and DOCX files
 -   Splits paths into 8 batches
 
-#### 2️⃣ **Parallel Indexing** (First Run Only)
+#### 2️ **Parallel Indexing** (First Run Only)
 
 ```python
 # 8 processes work simultaneously
@@ -138,7 +138,7 @@ Process 2: Files 1001-2000 → Extract keywords
 Process 8: Files 7001-8000 → Extract keywords
 ```
 
-#### 3️⃣ **Keyword Extraction** (RAKE Algorithm)
+#### 3️ **Keyword Extraction** (RAKE Algorithm)
 
 ```
 Input: "Machine learning algorithms use neural networks"
@@ -150,7 +150,7 @@ Extract phrases: ["machine learning algorithms", "neural networks"]
 Split to words: ["machine", "learning", "algorithms", "neural", "networks"]
 ```
 
-#### 4️⃣ **Index Storage**
+#### 4️ **Index Storage**
 
 ```json
 {
@@ -159,7 +159,7 @@ Split to words: ["machine", "learning", "algorithms", "neural", "networks"]
 }
 ```
 
-#### 5️⃣ **Search Process**
+#### 5️ **Search Process**
 
 ```
 User types: "neural network training"
@@ -177,7 +177,7 @@ Rank by relevance:
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 lexical-search-engine/
@@ -212,8 +212,15 @@ lexical-search-engine/
 
 ---
 
-## 📚 Reference
+## Reference
 
 -   [Base Paper / Reference PDF](https://drive.google.com/file/d/10f3bUmaTRzAZ2jOq6oWFu0ilP6Q6dyJx/view?usp=sharing)
 
 ---
+
+## Sample Screenshots
+- ### 🪟 Initial Window
+![Initial Window](images/Initial_Window.png)
+
+### 📄 Output Window
+![Output Window](images/Output_Window.png)
