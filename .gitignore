@@ -3,3 +3,4 @@
 /logs
 output.json
 search_engine.log
+__pycache__
