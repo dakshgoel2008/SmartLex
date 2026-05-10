@@ -20,7 +20,7 @@ if __name__ == "__main__":
     start = datetime.now()
     logger.info("Starting Lexical Search Engine")
 
-    if os.path.exists(cfg["OUTPUT_FILE"]):
+    if os.path.exists(cfg["OUTPUT_FILE"]) and os.path.exists(cfg["AUTOCOMPLETE_FILE"]):
         D = load_index(cfg["OUTPUT_FILE"])
         with open(cfg["AUTOCOMPLETE_FILE"], "r") as f:
             autocomplete_words = json.load(f)

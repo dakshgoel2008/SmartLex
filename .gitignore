@@ -4,3 +4,4 @@
 output.json
 search_engine.log
 __pycache__
+autocomplete_words.json
