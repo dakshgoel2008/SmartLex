@@ -10,57 +10,41 @@
 -    **Multi-format support**: PDF and DOCX files
 -    **Fast search**: ~0.02 seconds after initial indexing
 -    **Smart ranking**: Results sorted by relevance
--    **Auto-complete**: Suggests keywords as you type
+-    **Auto-complete**: Suggests keywords dynamically as you type
 
 ### Enhanced Features (New)
 
--    **Progress tracking**: Visual feedback during indexing
--    **Configurable settings**: Easy customization via config.json
--    **Logging**: Detailed logs for debugging
--    **Parallel processing**: Uses 8 cores for faster indexing
+-    **Standalone Executable**: No Python needed! Run straight from your desktop.
+-    **Cross-Platform Package**: Install via `pip install smartlex-search`
+-    **Modern UI**: Clean, beautifully designed Qt interface with dynamic status indicators.
+-    **Parallel processing**: Uses multithreading for blazingly fast background indexing.
+-    **Automated Setup**: Completely self-contained, handles NLTK and indexing without scripts!
 
 ---
 
 ##  Installation
 
-### Method 1: Automated Setup (Recommended)
+### Method 1: The Standalone App (No Python Required!)
 
-1. **Clone/Download the project**
+1. Go to the **Releases** page of this GitHub repository.
+2. Download `SmartLex.exe`.
+3. Double-click it! The app will automatically handle indexing and open right up.
 
+### Method 2: Terminal Package (For Developers)
+
+You can install this directly into your Python environment as a global package.
+
+1. **Install via pip**
 ```bash
-git clone https://github.com/dakshgoel2008/SmartLex.git
-cd SmartLex
+pip install smartlex-search
 ```
 
-2. **Run setup script**
-
+2. **Run it from anywhere**
 ```bash
-python setup.py
+smartlex
 ```
 
-### Method 2: Manual Setup
-
-1. **Install Python 3.8+**
-
-    - Download from [python.org](https://www.python.org/downloads/)
-
-2. **Install dependencies**
-
-```bash
-pip install -r requirements.txt
-```
-
-3. **Download NLTK data**
-
-```python
-python -c "import nltk; nltk.download('stopwords'); nltk.download('punkt')"
-```
-
-4. **Create folders**
-
-```bash
-mkdir all logs backups
-```
+*(Note: To install the developer version from source, simply clone the repo and run `pip install -e .`)*
 
 ---
 
@@ -68,45 +52,25 @@ mkdir all logs backups
 
 ### First Run (Indexing)
 
-**Windows:**
+Whether you use the `.exe` or the `smartlex` terminal command, the application will automatically detect if it is your first time running it. It will launch a background scanner that sweeps your drives for PDFs and Word documents, extracts their keywords using advanced NLP, and builds your local index.
 
-```bash
-# 1. Scan for files
-scripts/pdf_search.bat
-
-# 2. Run application (will index during first launch)
-python searchEngine.py
-```
-
-**Linux/Mac:**
-
-```bash
-# 1. Scan for files
-./scripts/pdf_search.sh
-
-# 2. Run application
-python searchEngine.py  # run it twice -> first run is for building
-```
-
-⏱️ **First run**: ~5 minutes (for ~327GB of documents)
-⏱️ **Subsequent runs**: ~0.02 seconds
+⏱️ **First run**: Depends on the number of files (usually a few minutes)
+⏱️ **Subsequent runs**: Instant! The UI will pop open in less than a second.
 
 ### Regular Usage
 
-```bash
-python searchEngine.py
-```
-
-1. Type keywords in search bar (e.g., "machine learning")
-2. Press Enter or click Search
-3. Click any result to open the document
+1. Type keywords in the modern search bar (e.g., "machine learning").
+2. The dynamic auto-complete will suggest words based specifically on the contents of your own files!
+3. Press Enter or click Search.
+4. Click or double-click any beautifully formatted result to instantly open the document.
 
 ### Keyboard Shortcuts
 
 -   `Enter`: Search / Open selected document
 -   `Tab`: Switch between search bar and results
 -   `↑/↓`: Navigate through results
--   `Esc`: Close application
+-   `Ctrl+F`: Focus the search bar
+-   `Esc`: Clear search / Close application
 
 ---
 
@@ -117,30 +81,21 @@ python searchEngine.py
 ```
 User Query → RAKE Extraction → Keyword Matching → Ranking → Results
                                        ↑
-                Document Index ← Multiprocessing ← File Scanner
+                Document Index ← Multithreading ← Automated File Scanner
 ```
 
 ### Step-by-Step Process
 
 #### 1️ **File Collection** (First Run Only)
-
--   Batch script scans entire system
--   Finds all PDF and DOCX files
--   Splits paths into 8 batches
+-   The internal Python scanner recursively sweeps all connected system drives.
+-   It strictly filters out system folders (`Windows`, `Program Files`, `.git`) for maximum speed.
+-   It collects all PDF and DOCX file paths.
 
 #### 2️ **Parallel Indexing** (First Run Only)
-
-```python
-# 8 processes work simultaneously
-Process 1: Files 1-1000    → Extract keywords
-Process 2: Files 1001-2000 → Extract keywords
-...
-Process 8: Files 7001-8000 → Extract keywords
-```
+-   Multiple background threads parse the documents simultaneously to maximize CPU efficiency.
 
 #### 3️ **Keyword Extraction** (RAKE Algorithm)
-
-```
+```text
 Input: "Machine learning algorithms use neural networks"
         ↓
 Remove stopwords: "Machine learning algorithms use neural networks"
@@ -151,7 +106,7 @@ Split to words: ["machine", "learning", "algorithms", "neural", "networks"]
 ```
 
 #### 4️ **Index Storage**
-
+The system builds an ultra-fast lookup dictionary (`output.json`):
 ```json
 {
     "C:/docs/paper1.pdf": ["machine", "learning", "neural", "network"],
@@ -160,8 +115,7 @@ Split to words: ["machine", "learning", "algorithms", "neural", "networks"]
 ```
 
 #### 5️ **Search Process**
-
-```
+```text
 User types: "neural network training"
         ↓
 Extract keywords: ["neural", "network", "training"]
@@ -179,35 +133,20 @@ Rank by relevance:
 
 ##  Project Structure
 
-```
-lexical-search-engine/
+```text
+SmartLex/
 │
-├── searchEngine.py
+├── pyproject.toml         # Package configuration
+├── run.py                 # PyInstaller entry point
 │
-├── core/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── logger.py
-│   ├── text_extraction.py
-│   ├── keyword_extraction.py
-│   ├── processor.py
-│   ├── index_manager.py
-│   └── search_engine.py
+├── src/smartlex/
+│   ├── main.py            # Core application entry
+│   ├── core/              # NLP, parsing, and indexing logic
+│   └── gui/               # PyQt5 interface and background threads
 │
-├── gui/
-│   ├── __init__.py
-│   ├── widgets.py
-│   ├── main_window.py
-│   └── threads.py
-│
-├── scripts/
-│   ├── pdf_search.bat
-│   └── pdf_search.sh
-│
-├── autocomplete_words.json
 ├── requirements.txt
 ├── config.json
-├── README.md
+└── README.md
 ```
 
 ---
@@ -227,5 +166,5 @@ lexical-search-engine/
 ![Output Window](images/Output_Window.png)
 
 ### Future enhancement
-- Working on to add support for additional file types such as TXT, CSV, XLSX, PPTX, HTML, etc.
+- Working on adding support for additional file types such as TXT, CSV, XLSX, PPTX, HTML, etc.
 - Currently working on similar functionality for images, audios etc.
