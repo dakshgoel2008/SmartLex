@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartlex-search"
+version = "1.0.0"
+authors = [
+  { name="Daksh Goel", email="daksh@example.com" },
+]
+description = "A lexical, ultra-fast cross-platform search engine"
+readme = "readme.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "PyQt5==5.15.9",
+    "PyMuPDF==1.23.8",
+    "rake-nltk==1.0.6",
+    "nltk==3.8.1",
+    "python-docx==1.1.0",
+    "tqdm==4.66.1",
+    "watchdog==3.0.0"
+]
+
+[project.scripts]
+smartlex = "smartlex.main:main"

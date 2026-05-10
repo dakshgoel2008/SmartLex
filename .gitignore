@@ -5,3 +5,9 @@ output.json
 search_engine.log
 __pycache__
 autocomplete_words.json
+
+# PyInstaller / Build artifacts
+/build
+/dist
+*.spec
+*.egg-info

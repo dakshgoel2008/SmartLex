@@ -2,7 +2,7 @@
 import fitz
 from docx import Document
 
-from core.logger import setup_logger
+from smartlex.core.logger import setup_logger
 
 logger = setup_logger(__name__)
 

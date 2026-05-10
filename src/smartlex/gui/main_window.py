@@ -16,9 +16,9 @@ from PyQt5.QtWidgets import (
     QShortcut,
 )
 
-from core.logger import setup_logger
-from core.search_engine import search
-from gui.widgets import CustomCompleter
+from smartlex.core.logger import setup_logger
+from smartlex.core.search_engine import search
+from smartlex.gui.widgets import CustomCompleter
 
 logger = setup_logger(__name__)
 

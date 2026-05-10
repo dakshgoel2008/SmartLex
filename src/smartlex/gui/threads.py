@@ -5,11 +5,11 @@ from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from core.config import load_config
-from core.index_manager import generate_autocomplete, save_index
-from core.logger import setup_logger
-from core.processor import process_all_batches
-from core.scanner import scan_all_drives
+from smartlex.core.config import load_config
+from smartlex.core.index_manager import generate_autocomplete, save_index
+from smartlex.core.logger import setup_logger
+from smartlex.core.processor import process_all_batches
+from smartlex.core.scanner import scan_all_drives
 
 logger = setup_logger(__name__)
 

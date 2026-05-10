@@ -1,4 +1,4 @@
-from core.keyword_extraction import rake_keywords
+from smartlex.core.keyword_extraction import rake_keywords
 
 
 def search(query, index_data):

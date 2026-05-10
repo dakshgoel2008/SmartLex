@@ -3,9 +3,9 @@ import os
 from collections import Counter
 from pathlib import Path
 
-from core.keyword_extraction import rake_keywords
-from core.logger import setup_logger
-from core.text_extraction import extract_text_docx, extract_text_pdf
+from smartlex.core.keyword_extraction import rake_keywords
+from smartlex.core.logger import setup_logger
+from smartlex.core.text_extraction import extract_text_docx, extract_text_pdf
 
 logger = setup_logger(__name__)
 
