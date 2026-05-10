@@ -5,14 +5,12 @@ import sys
 
 
 def print_header(text):
-    """Print formatted header"""
     print("\n" + "=" * 60)
     print(f"  {text}")
     print("=" * 60 + "\n")
 
 
 def check_python_version():
-    """Ensure Python 3.8+"""
     print_header("Checking Python Version")
     version = sys.version_info
     print(f"Python version: {version.major}.{version.minor}.{version.micro}")
@@ -26,7 +24,6 @@ def check_python_version():
 
 
 def install_dependencies():
-    """Install required packages"""
     print_header("Installing Dependencies")
 
     try:
@@ -42,7 +39,6 @@ def install_dependencies():
 
 
 def download_nltk_data():
-    """Download required NLTK data"""
     print_header("Downloading NLTK Data")
 
     try:
@@ -55,12 +51,11 @@ def download_nltk_data():
         print("SUCCESSFUL: NLTK data downloaded")
         return True
     except Exception as e:
-        print(f"❌ Error downloading NLTK data: {e}")
+        print(f" Error downloading NLTK data: {e}")
         return False
 
 
 def create_directory_structure():
-    """Create necessary folders"""
     print_header("Creating Directory Structure")
 
     folders = ["all", "logs", "backups"]
@@ -76,7 +71,6 @@ def create_directory_structure():
 
 
 def create_default_config():
-    """Create default config.json if not exists"""
     print_header("Creating Configuration")
 
     if os.path.exists("config.json"):
@@ -84,12 +78,13 @@ def create_default_config():
         return True
 
     default_config = {
-        "num_processes": 8,
-        "top_keywords": 150,
-        "autocomplete_words": 100,
-        "supported_formats": [".pdf", ".docx"],
-        "index_folder": "all",
-        "output_file": "output.json",
+        "NUM_PROCESSES": 8,
+        "TOP_KEYWORDS": 150,
+        "AUTOCOMPLETE_WORDS": 100,
+        "SUPPORTED_FORMATS": [".pdf", ".docx"],
+        "INDEX_FOLDER": "all",
+        "OUTPUT_FILE": "output.json",
+        "AUTOCOMPLETE_FILE": "autocomplete_words.json",
     }
 
     with open("config.json", "w") as f:
@@ -100,7 +95,6 @@ def create_default_config():
 
 
 def run_tests():
-    """Run basic tests"""
     print_header("Running Tests")
 
     try:
@@ -133,7 +127,6 @@ def run_tests():
 
 
 def main():
-    """Main setup function"""
     print("\n" + "🚀" * 30)
     print("  LEXICAL SEARCH ENGINE - SETUP")
     print("🚀" * 30)
@@ -163,13 +156,11 @@ def main():
     if not failed_steps:
         print("SUCCESSFUL: Setup completed successfully!")
         print("\nNext steps:")
-        print("1. Run the file scanner script already present in /scripts/:")
-        print("   Windows: scripts\\pdf_search.bat")
-        print("   Linux/Mac: scripts/pdf_search.sh")
-        print("\n2. Run the application:")
+        print("1. Run the application:")
         print("   python searchEngine.py")
+        print("   (It will automatically scan and index your files on the first run)")
     else:
-        print("⚠ ERROR: Setup completed with some issues:")
+        print("⚠️ ERROR: Setup completed with some issues:")
         for step in failed_steps:
             print(f"   ERROR: {step}")
         print("\nPlease resolve the issues above and try again.")

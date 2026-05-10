@@ -43,8 +43,9 @@ if __name__ == "__main__":
         def complete(D, words):
             save_index(D, cfg["OUTPUT_FILE"])
             loading.close()
-            widget = MyWidget(words, D)
-            widget.show()
+            # Store reference in app to prevent garbage collection
+            app.main_window = MyWidget(words, D)
+            app.main_window.show()
 
         thread.finished_signal.connect(complete)
         thread.start()
