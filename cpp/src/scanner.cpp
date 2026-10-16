@@ -90,7 +90,9 @@ bool FileScanner::is_excluded_directory(const std::string& dir_name) {
         "site-packages",
         "dist-packages",
         "build",
-        "dist"
+        "dist",
+        "logs",
+        "backups"
     };
 
     std::string lower = to_lower_ascii_str(dir_name);
@@ -176,7 +178,19 @@ std::vector<ScannedFile> FileScanner::scan_directories(
                             discovered_subdirs.push_back(entry.path().string());
                         }
                     } else if (entry.is_regular_file(entry_ec)) {
+                        if (name.empty() || name[0] == '.' || name.rfind("~$", 0) == 0) {
+                            continue;
+                        }
                         std::string name_lower = to_lower_ascii_str(name);
+                        if (name_lower == "autocomplete_words.json" ||
+                            name_lower == "output.json" ||
+                            name_lower == "search_engine.log" ||
+                            name_lower == "cli_batch.txt" ||
+                            (name_lower.rfind("pdf_part_", 0) == 0 &&
+                             name_lower.size() > 4 &&
+                             name_lower.substr(name_lower.size() - 4) == ".txt")) {
+                            continue;
+                        }
                         if (has_supported_extension(name_lower, norm_extensions)) {
                             std::string full_path = entry.path().string();
                             uint64_t fsize = entry.file_size(entry_ec);

@@ -67,9 +67,30 @@ class RealTimeFileWatcher:
 
     def is_supported_file(self, path: str) -> bool:
         name_lower = os.path.basename(path).lower()
-        if name_lower.startswith(".") or name_lower.startswith("~$"):
+        if not name_lower or name_lower.startswith(".") or name_lower.startswith("~$"):
             return False  # Ignore hidden and Office temporary lock files
-        return name_lower.endswith(self.supported_extensions)
+        if (
+            name_lower in ("autocomplete_words.json", "output.json", "search_engine.log", "cli_batch.txt")
+            or (name_lower.startswith("pdf_part_") and name_lower.endswith(".txt"))
+        ):
+            return False  # Ignore SmartLex's own internal runtime artifacts
+        if not name_lower.endswith(self.supported_extensions):
+            return False
+
+        # Ensure no directory component inside the watched root is a hidden or excluded directory
+        from smartlex.core.scanner import EXCLUDE_DIRS
+
+        norm_path = os.path.abspath(path)
+        for root in self.watch_roots:
+            norm_root = os.path.abspath(root)
+            if norm_path.startswith(norm_root + os.sep):
+                rel_dir = os.path.dirname(norm_path[len(norm_root) + 1 :])
+                if rel_dir:
+                    for part in Path(rel_dir).parts:
+                        p_low = part.lower()
+                        if p_low.startswith(".") or p_low in EXCLUDE_DIRS or p_low in ("logs", "backups", "all"):
+                            return False
+        return True
 
     # --- Event Recording API (Thread-Safe) ---
 

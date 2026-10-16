@@ -24,9 +24,12 @@ logger = setup_logger(__name__)
 
 # Optional PyMuPDF import (falls back to system `pdftotext` if not installed)
 try:
-    import fitz  # PyMuPDF
+    import pymupdf as fitz  # PyMuPDF >= 1.24 (avoids `import fitz` deprecation warning)
 except ImportError:
-    fitz = None
+    try:
+        import fitz  # Legacy PyMuPDF
+    except ImportError:
+        fitz = None
 
 
 def _ocr_scanned_pdf_pages(file_path: str, max_pages: int = 10) -> str:

@@ -1,17 +1,16 @@
-import subprocess
-import sys
 import time
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
+    QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QShortcut,
     QVBoxLayout,
@@ -25,10 +24,22 @@ from smartlex.core.native_engine import SmartLexEngine
 from smartlex.core.scanner import get_available_drives
 from smartlex.core.search_engine import search, search_with_snippets
 from smartlex.core.watcher import RealTimeFileWatcher
+from smartlex.gui.file_actions import open_file_with_default_app, reveal_in_file_manager
+from smartlex.gui.result_formatting import build_search_query, parse_indexing_progress
+from smartlex.gui.search_widgets import FilterPillBar, ResultListWidget
 from smartlex.gui.threads import IndexingThread
 from smartlex.gui.widgets import CustomCompleter
 
 logger = setup_logger(__name__)
+
+# Colour scheme of the status bar at the bottom of the window, per message kind
+STATUS_STYLES = {
+    "idle": "padding: 10px; background-color: #ffffff; border-radius: 8px; border: 1px solid #e0e6ed; color: #7f8c8d; font-weight: bold;",
+    "info": "padding: 10px; background-color: #f0f7ff; border-radius: 8px; border: 1px solid #bae6fd; color: #0284c7; font-weight: bold;",
+    "success": "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;",
+    "warning": "padding: 10px; background-color: #fefce8; border-radius: 8px; border: 1px solid #fef08a; color: #a16207; font-weight: bold;",
+    "error": "padding: 10px; background-color: #fdf2f2; border-radius: 8px; border: 1px solid #fecaca; color: #ef4444; font-weight: bold;",
+}
 
 
 class MyWidget(QWidget):
@@ -70,7 +81,7 @@ class MyWidget(QWidget):
             cfg = load_config()
             words = generate_autocomplete(self.index_data, cfg["AUTOCOMPLETE_WORDS"])
             self.update_index(self.index_data, words, quiet=True)
-            if self.search_input.text().strip():
+            if self._current_query():
                 self.perform_search()
 
     def closeEvent(self, event):
@@ -103,7 +114,7 @@ class MyWidget(QWidget):
                 font-size: 28pt;
                 font-weight: 800;
                 margin-top: 15px;
-                margin-bottom: 25px;
+                margin-bottom: 15px;
             }
             QLabel#ResultsHeader {
                 font-size: 14pt;
@@ -155,16 +166,45 @@ class MyWidget(QWidget):
             QPushButton#ClearButton:pressed, QPushButton#SyncButton:pressed {
                 background-color: #bdc3c7;
             }
+            QPushButton#FilterPill {
+                padding: 6px 14px;
+                font-size: 10pt;
+                font-weight: 600;
+                border-radius: 15px;
+                background-color: #ffffff;
+                color: #5d6d7e;
+                border: 1px solid #d5dde5;
+            }
+            QPushButton#FilterPill:hover {
+                background-color: #ecf0f1;
+                color: #2c3e50;
+            }
+            QPushButton#FilterPill:checked {
+                background-color: #3498db;
+                color: white;
+                border: 1px solid #3498db;
+            }
+            QProgressBar#IndexProgress {
+                border: 1px solid #e0e6ed;
+                border-radius: 6px;
+                background-color: #ffffff;
+                text-align: center;
+                font-size: 9pt;
+                color: #2c3e50;
+            }
+            QProgressBar#IndexProgress::chunk {
+                background-color: #3498db;
+                border-radius: 5px;
+            }
             QListWidget {
                 border: 2px solid #e0e6ed;
                 border-radius: 12px;
                 background-color: #ffffff;
                 font-size: 13pt;
-                padding: 10px;
+                padding: 6px;
                 outline: none;
             }
             QListWidget::item {
-                padding: 15px;
                 border-bottom: 1px solid #f0f3f6;
                 color: #34495e;
             }
@@ -175,10 +215,45 @@ class MyWidget(QWidget):
                 background-color: #e8f4fd;
                 color: #2980b9;
                 border-radius: 8px;
-                font-weight: 600;
+            }
+            QFrame#ResultCard, QFrame#ResultCard QLabel {
+                background-color: transparent;
+            }
+            QLabel#CardIcon {
+                font-size: 22pt;
+            }
+            QLabel#CardTitle {
+                font-size: 13pt;
+                font-weight: 700;
+                color: #2c3e50;
+            }
+            QLabel#CardPath {
+                font-size: 9pt;
+                color: #7f8c8d;
+            }
+            QLabel#CardSnippet {
+                font-size: 11pt;
+                color: #34495e;
+            }
+            QLabel#CardMeta {
+                font-size: 9pt;
+                color: #95a5a6;
             }
             QListView::item {
                 padding: 8px;
+            }
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #e0e6ed;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 24px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected {
+                background-color: #e8f4fd;
+                color: #2980b9;
             }
             QScrollBar:vertical {
                 border: none;
@@ -202,7 +277,7 @@ class MyWidget(QWidget):
         )
 
         layout = QVBoxLayout()
-        layout.setSpacing(15)
+        layout.setSpacing(12)
         layout.setContentsMargins(30, 20, 30, 20)
 
         title_label = QLabel("SmartLex Search Engine")
@@ -219,7 +294,7 @@ class MyWidget(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setCompleter(completer)
         self.search_input.setPlaceholderText(
-            'Search keywords, "exact phrase", ext:pdf, path:docs, -exclude (e.g. invoice 2024)'
+            'Search keywords, "exact phrase", ext:pdf, type:image, path:docs, -exclude'
         )
         self.search_input.setMinimumHeight(50)
         self.search_input.textChanged.connect(self._on_text_changed)
@@ -250,29 +325,41 @@ class MyWidget(QWidget):
 
         layout.addLayout(search_layout)
 
+        # Category filter pills: All / Docs / Sheets / Slides / Images / Audio / Video / Code
+        self.filter_bar = FilterPillBar()
+        self.filter_bar.category_changed.connect(self._on_category_changed)
+        layout.addWidget(self.filter_bar)
+
+        # Live indexing progress (hidden while no sync is running)
+        self.index_progress = QProgressBar()
+        self.index_progress.setObjectName("IndexProgress")
+        self.index_progress.setFixedHeight(18)
+        self.index_progress.setVisible(False)
+        layout.addWidget(self.index_progress)
+
         results_header = QHBoxLayout()
-        results_header.setContentsMargins(5, 10, 5, 0)
+        results_header.setContentsMargins(5, 6, 5, 0)
 
         self.results_label = QLabel("Results: 0")
         self.results_label.setObjectName("ResultsHeader")
         results_header.addWidget(self.results_label)
         results_header.addStretch()
 
-        help_label = QLabel("Double-click or press Enter to open file")
+        help_label = QLabel("Enter / double-click to open  •  Right-click for more actions")
         help_label.setObjectName("HelpLabel")
         results_header.addWidget(help_label)
         layout.addLayout(results_header)
 
-        self.result_list = QListWidget()
-        self.result_list.setAlternatingRowColors(True)
+        self.result_list = ResultListWidget()
         self.result_list.itemDoubleClicked.connect(self.open_file)
-        self.result_list.setMinimumHeight(400)
+        self.result_list.open_item_requested.connect(self.open_file)
+        self.result_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.result_list.customContextMenuRequested.connect(self._show_result_context_menu)
+        self.result_list.setMinimumHeight(380)
         layout.addWidget(self.result_list)
 
         self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet(
-            "padding: 10px; background-color: #ffffff; border-radius: 8px; border: 1px solid #e0e6ed; color: #7f8c8d; font-weight: bold;"
-        )
+        self.status_label.setStyleSheet(STATUS_STYLES["idle"])
         layout.addWidget(self.status_label)
 
         self.setLayout(layout)
@@ -287,6 +374,25 @@ class MyWidget(QWidget):
         escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         escape_shortcut.activated.connect(self.clear_search)
 
+        # Ctrl+Enter: show the selected result in its folder
+        for key_sequence in ("Ctrl+Return", "Ctrl+Enter"):
+            reveal_shortcut = QShortcut(QKeySequence(key_sequence), self)
+            reveal_shortcut.activated.connect(self._reveal_selected_result)
+
+        # Ctrl+C while the result list has focus: copy the selected file path
+        copy_shortcut = QShortcut(QKeySequence(QKeySequence.Copy), self.result_list)
+        copy_shortcut.setContext(Qt.WidgetShortcut)
+        copy_shortcut.activated.connect(self._copy_selected_result_path)
+
+    def _set_status(self, text, kind="idle"):
+        """Shows `text` in the status bar using one of the STATUS_STYLES colours."""
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(STATUS_STYLES[kind])
+
+    def _current_query(self):
+        """The full query sent to the engine: typed text + selected filter pill."""
+        return build_search_query(self.search_input.text(), self.filter_bar.current_category())
+
     def _on_text_changed(self, text):
         if text.strip():
             self.search_timer.start(150)
@@ -294,49 +400,69 @@ class MyWidget(QWidget):
     def _execute_search(self):
         self.perform_search()
 
+    def _on_category_changed(self, _category_key):
+        if self._current_query():
+            self.perform_search()
+        else:
+            # "All" selected with an empty search box: nothing to show
+            self.result_list.clear()
+            self.results_label.setText("Results: 0")
+            self._set_status("Ready", "idle")
+
     def trigger_incremental_sync(self):
         if self.indexing_thread and self.indexing_thread.isRunning():
             return
         self.sync_button.setEnabled(False)
+        self.index_progress.setRange(0, 0)  # "busy" animation until counts arrive
+        self.index_progress.setVisible(True)
+
         engine_arg = (
             self.index_data if isinstance(self.index_data, SmartLexEngine) else None
         )
         self.indexing_thread = IndexingThread(self, engine=engine_arg)
-        self.indexing_thread.progress.connect(self.status_label.setText)
+        self.indexing_thread.progress.connect(self._on_indexing_progress)
 
         def on_tier_ready(live_engine, live_words):
             self.update_index(live_engine, live_words, quiet=True)
-            if self.search_input.text().strip():
+            if self._current_query():
                 self.perform_search()
 
         def on_sync_finished(new_engine, new_words):
-            self.sync_button.setEnabled(True)
             self.update_index(new_engine, new_words, quiet=False)
             self._start_realtime_watcher()
 
-        def on_sync_error(_msg):
-            self.sync_button.setEnabled(True)
-
         self.indexing_thread.tier_ready_signal.connect(on_tier_ready)
         self.indexing_thread.finished_signal.connect(on_sync_finished)
-        self.indexing_thread.error_signal.connect(on_sync_error)
+        # QThread's built-in `finished` fires after run() returns for ANY reason
+        # (success, error, or cancel) and after all of its other signals.
+        self.indexing_thread.finished.connect(self._on_indexing_thread_stopped)
         self.indexing_thread.start()
 
+    def _on_indexing_progress(self, message):
+        self.status_label.setText(message)
+        progress = parse_indexing_progress(message)
+        if progress is None:
+            # Scanning or saving: no file count available, keep the busy animation
+            self.index_progress.setRange(0, 0)
+            return
+        files_done, files_total = progress
+        self.index_progress.setRange(0, files_total)
+        self.index_progress.setValue(files_done)
+        self.index_progress.setFormat(f"Indexing contents: {files_done}/{files_total} files (%p%)")
+
+    def _on_indexing_thread_stopped(self):
+        self.sync_button.setEnabled(True)
+        self.index_progress.setVisible(False)
+
     def perform_search(self):
-        query = self.search_input.text().strip()
+        query = self._current_query()
 
         if not query:
-            self.status_label.setText("Please enter a search query")
-            self.status_label.setStyleSheet(
-                "padding: 10px; background-color: #fdf2f2; border-radius: 8px; border: 1px solid #fecaca; color: #ef4444; font-weight: bold;"
-            )
+            self._set_status("Please enter a search query", "error")
             return
 
         try:
-            self.status_label.setText(f"Searching for: {query}...")
-            self.status_label.setStyleSheet(
-                "padding: 10px; background-color: #f0f7ff; border-radius: 8px; border: 1px solid #bae6fd; color: #0284c7; font-weight: bold;"
-            )
+            self._set_status(f"Searching for: {query}...", "info")
             self.search_button.setEnabled(False)
 
             t0 = time.perf_counter()
@@ -350,35 +476,22 @@ class MyWidget(QWidget):
                 detailed_results = [{"path": p, "snippet": ""} for p in paths]
 
             if not detailed_results:
-                self.result_list.addItem("No results found. Try different keywords.")
-                self.results_label.setText("Results: 0")
-                self.status_label.setText(
-                    f"No results found for '{query}' ({elapsed_ms:.2f} ms)"
+                self.result_list.add_message(
+                    "No results found. Try different keywords or another filter."
                 )
-                self.status_label.setStyleSheet(
-                    "padding: 10px; background-color: #fefce8; border-radius: 8px; border: 1px solid #fef08a; color: #a16207; font-weight: bold;"
+                self.results_label.setText("Results: 0")
+                self._set_status(
+                    f"No results found for '{query}' ({elapsed_ms:.2f} ms)", "warning"
                 )
             else:
-                for res in detailed_results:
-                    file_path = res["path"]
-                    snippet = res.get("snippet", "")
-                    display_text = (
-                        f"{file_path}\n    {snippet}" if snippet else file_path
-                    )
-
-                    item = QListWidgetItem(display_text)
-                    item.setData(Qt.UserRole, file_path)
-                    if snippet:
-                        item.setToolTip(snippet)
-                    self.result_list.addItem(item)
+                for result in detailed_results:
+                    self.result_list.add_result_card(result)
 
                 self.result_list.setCurrentRow(0)
                 self.results_label.setText(f"Results: {len(detailed_results)}")
-                self.status_label.setText(
-                    f"Found {len(detailed_results)} result(s) for '{query}' in {elapsed_ms:.2f} ms"
-                )
-                self.status_label.setStyleSheet(
-                    "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
+                self._set_status(
+                    f"Found {len(detailed_results)} result(s) for '{query}' in {elapsed_ms:.2f} ms",
+                    "success",
                 )
 
                 logger.info(
@@ -388,10 +501,7 @@ class MyWidget(QWidget):
         except Exception as e:
             error_msg = f"Search error: {str(e)}"
             logger.error(error_msg)
-            self.status_label.setText(error_msg)
-            self.status_label.setStyleSheet(
-                "padding: 10px; background-color: #fdf2f2; border-radius: 8px; border: 1px solid #fecaca; color: #ef4444; font-weight: bold;"
-            )
+            self._set_status(error_msg, "error")
             QMessageBox.warning(
                 self, "Search Error", f"An error occurred during search:\n{str(e)}"
             )
@@ -402,48 +512,70 @@ class MyWidget(QWidget):
     def clear_search(self):
         self.search_timer.stop()
         self.search_input.clear()
+        self.filter_bar.reset()
         self.result_list.clear()
         self.results_label.setText("Results: 0")
-        self.status_label.setText("Ready")
-        self.status_label.setStyleSheet(
-            "padding: 10px; background-color: #ffffff; border-radius: 8px; border: 1px solid #e0e6ed; color: #7f8c8d; font-weight: bold;"
-        )
+        self._set_status("Ready", "idle")
         self.search_input.setFocus()
 
+    # --- Result actions: open, show in folder, copy path ---
+
     def open_file(self, item):
-        file_path = item.data(Qt.UserRole) or item.text().split("\n")[0]
+        file_path = item.data(Qt.UserRole) if item is not None else None
+        if file_path:
+            self._open_result_path(file_path)
 
-        if file_path in (
-            "No results found. Try different keywords.",
-            "No results found",
-        ):
+    def _show_result_context_menu(self, position):
+        # For list widgets, `position` is in viewport coordinates
+        item = self.result_list.itemAt(position)
+        file_path = item.data(Qt.UserRole) if item is not None else None
+        if not file_path:
             return
+        self.result_list.setCurrentItem(item)
 
-        file = Path(file_path)
+        menu = QMenu(self)
+        open_action = menu.addAction("Open File")
+        reveal_action = menu.addAction("Show in Folder")
+        menu.addSeparator()
+        copy_action = menu.addAction("Copy Full Path")
 
-        if not file.exists():
-            QMessageBox.warning(
-                self,
-                "File Not Found",
-                f"The file does not exist:\n{file_path}\n\nIt may have been moved or deleted.",
-            )
-            logger.warning(f"Attempted to open non-existent file: {file_path}")
+        chosen_action = menu.exec_(self.result_list.viewport().mapToGlobal(position))
+        if chosen_action is open_action:
+            self._open_result_path(file_path)
+        elif chosen_action is reveal_action:
+            self._reveal_result_path(file_path)
+        elif chosen_action is copy_action:
+            self._copy_result_path(file_path)
+
+    def _reveal_selected_result(self):
+        file_path = self.result_list.selected_file_path()
+        if file_path:
+            self._reveal_result_path(file_path)
+
+    def _copy_selected_result_path(self):
+        file_path = self.result_list.selected_file_path()
+        if file_path:
+            self._copy_result_path(file_path)
+
+    def _warn_if_missing(self, file_path):
+        """Shows a warning and returns True if `file_path` no longer exists."""
+        if Path(file_path).exists():
+            return False
+        QMessageBox.warning(
+            self,
+            "File Not Found",
+            f"The file does not exist:\n{file_path}\n\nIt may have been moved or deleted.",
+        )
+        logger.warning(f"Attempted to open non-existent file: {file_path}")
+        return True
+
+    def _open_result_path(self, file_path):
+        if self._warn_if_missing(file_path):
             return
-
         try:
-            if sys.platform == "win32":
-                subprocess.Popen(["start", "", file_path], shell=True)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", file_path])
-            else:
-                subprocess.Popen(["xdg-open", file_path])
-
-            self.status_label.setText(f"Opened: {file.name}")
-            self.status_label.setStyleSheet(
-                "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
-            )
+            open_file_with_default_app(file_path)
+            self._set_status(f"Opened: {Path(file_path).name}", "success")
             logger.info(f"Opened file: {file_path}")
-
         except Exception as e:
             error_msg = f"Error opening file: {str(e)}"
             logger.error(f"{error_msg} - {file_path}")
@@ -452,10 +584,22 @@ class MyWidget(QWidget):
                 "Error Opening File",
                 f"Could not open the file:\n{file_path}\n\nError: {str(e)}",
             )
-            self.status_label.setText(error_msg)
-            self.status_label.setStyleSheet(
-                "padding: 10px; background-color: #fdf2f2; border-radius: 8px; border: 1px solid #fecaca; color: #ef4444; font-weight: bold;"
-            )
+            self._set_status(error_msg, "error")
+
+    def _reveal_result_path(self, file_path):
+        if self._warn_if_missing(file_path):
+            return
+        try:
+            reveal_in_file_manager(file_path)
+            self._set_status(f"Showing in folder: {Path(file_path).name}", "success")
+        except Exception as e:
+            error_msg = f"Error opening folder: {str(e)}"
+            logger.error(f"{error_msg} - {file_path}")
+            self._set_status(error_msg, "error")
+
+    def _copy_result_path(self, file_path):
+        QApplication.clipboard().setText(file_path)
+        self._set_status(f"Copied path: {file_path}", "success")
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -464,9 +608,7 @@ class MyWidget(QWidget):
             if self.search_input.hasFocus():
                 self.perform_search()
             elif self.result_list.hasFocus():
-                items = self.result_list.selectedItems()
-                if items:
-                    self.open_file(items[0])
+                self.open_file(self.result_list.currentItem())
 
         elif key == Qt.Key_Tab:
             event.accept()
@@ -495,10 +637,8 @@ class MyWidget(QWidget):
         self.search_input.setCompleter(completer)
 
         if not quiet:
-            self.status_label.setText(
-                f"✓ Ready ({len(new_index_data)} files indexed • Live watcher active)"
-            )
-            self.status_label.setStyleSheet(
-                "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
+            self._set_status(
+                f"✓ Ready ({len(new_index_data)} files indexed • Live watcher active)",
+                "success",
             )
         logger.info("Index and autocomplete data updated")

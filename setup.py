@@ -1,5 +1,5 @@
 import sys
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 
 extra_compile_args = ["-std=c++20", "-O3", "-Wall", "-Wextra"]
 if sys.platform == "win32":
@@ -19,4 +19,8 @@ smartlex_core_ext = Extension(
 )
 
 if __name__ == "__main__":
-    setup(ext_modules=[smartlex_core_ext])
+    setup(
+        package_dir={"": "src"},
+        packages=find_packages(where="src"),
+        ext_modules=[smartlex_core_ext],
+    )
