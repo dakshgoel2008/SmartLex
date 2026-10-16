@@ -1,11 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
-#include <vector>
-
 #include <unordered_set>
+#include <vector>
 
 namespace smartlex {
 
@@ -69,6 +70,7 @@ struct ParsedQuery {
     std::vector<std::vector<std::string>> exact_phrases;
     std::vector<std::string> excluded_terms;
     std::string ext_filter;
+    std::unordered_set<std::string> allowed_extensions;
     std::string path_filter;
 };
 
@@ -93,6 +95,11 @@ public:
      * Returns true if the document existed and was removed.
      */
     bool remove_document(const std::string& path);
+
+    /**
+     * Updates a document's path in O(1) time when a file is moved to another folder.
+     */
+    bool rename_document(const std::string& old_path, const std::string& new_path);
 
     /**
      * Checks if a document at `path` is already indexed with the exact same
@@ -137,12 +144,12 @@ public:
     /**
      * Number of active (non-deleted) documents in the index.
      */
-    size_t active_document_count() const { return active_doc_count_; }
+    size_t active_document_count() const;
 
     /**
      * Total number of unique terms in the inverted index dictionary.
      */
-    size_t vocabulary_size() const { return exact_postings_.size(); }
+    size_t vocabulary_size() const;
 
     /**
      * Returns all active document paths currently in the index.
@@ -150,6 +157,8 @@ public:
     std::vector<std::string> get_all_paths() const;
 
 private:
+    bool remove_document_unlocked(const std::string& path);
+
     // Appends a single Posting into a CompressedPostingList
     static void append_posting(CompressedPostingList& list, const Posting& posting);
 
@@ -163,6 +172,7 @@ private:
     std::unordered_set<uint32_t> compute_phrase_matching_docs(
         const std::vector<std::string>& phrase) const;
 
+    mutable std::shared_mutex mutex_;
     std::vector<DocumentMeta> documents_;
     std::unordered_map<std::string, uint32_t> path_to_doc_id_;
 

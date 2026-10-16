@@ -99,7 +99,7 @@ std::vector<Posting> InvertedIndex::decode_postings(const CompressedPostingList&
     return result;
 }
 
-bool InvertedIndex::remove_document(const std::string& path) {
+bool InvertedIndex::remove_document_unlocked(const std::string& path) {
     auto it = path_to_doc_id_.find(path);
     if (it == path_to_doc_id_.end()) {
         return false;
@@ -119,9 +119,38 @@ bool InvertedIndex::remove_document(const std::string& path) {
     return true;
 }
 
+bool InvertedIndex::remove_document(const std::string& path) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    return remove_document_unlocked(path);
+}
+
+bool InvertedIndex::rename_document(const std::string& old_path, const std::string& new_path) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    if (old_path == new_path) {
+        return path_to_doc_id_.find(old_path) != path_to_doc_id_.end();
+    }
+
+    auto it = path_to_doc_id_.find(old_path);
+    if (it == path_to_doc_id_.end()) {
+        return false;
+    }
+    uint32_t doc_id = it->second;
+    path_to_doc_id_.erase(it);
+
+    // If new_path already existed, tombstone it first
+    remove_document_unlocked(new_path);
+
+    DocumentMeta& meta = documents_[doc_id];
+    meta.path = new_path;
+    split_path_info(new_path, meta.filename, meta.extension);
+    path_to_doc_id_[new_path] = doc_id;
+    return true;
+}
+
 bool InvertedIndex::is_up_to_date(const std::string& path,
                                   uint64_t mtime_ns,
                                   uint64_t file_size) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     if (mtime_ns == 0 && file_size == 0) {
         return false;
     }
@@ -137,8 +166,9 @@ uint32_t InvertedIndex::add_document(const std::string& path,
                                      const std::string& raw_text,
                                      uint64_t mtime_ns,
                                      uint64_t file_size) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     // If this path was already indexed, tombstone the old version first
-    remove_document(path);
+    remove_document_unlocked(path);
 
     uint32_t doc_id = static_cast<uint32_t>(documents_.size());
 
@@ -257,9 +287,59 @@ ParsedQuery InvertedIndex::parse_query(const std::string& raw_query) {
 
         if (lower_chunk.rfind("ext:", 0) == 0 || lower_chunk.rfind("type:", 0) == 0) {
             size_t colon = lower_chunk.find(':');
-            std::string ext = lower_chunk.substr(colon + 1);
-            if (!ext.empty()) {
-                parsed.ext_filter = (ext[0] == '.') ? ext : ("." + ext);
+            std::string val = lower_chunk.substr(colon + 1);
+            if (!val.empty()) {
+                auto add_ext = [&](const std::string& e) {
+                    if (e.empty()) return;
+                    std::string norm = (e[0] == '.') ? e : ("." + e);
+                    parsed.allowed_extensions.insert(norm);
+                    if (parsed.ext_filter.empty()) {
+                        parsed.ext_filter = norm;
+                    }
+                };
+
+                // Support semantic category names (e.g. type:image, type:audio, type:video)
+                if (val == "image" || val == "images" || val == "img" || val == "photo" || val == "photos") {
+                    for (const char* e : {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif", ".svg"}) {
+                        add_ext(e);
+                    }
+                } else if (val == "audio" || val == "music" || val == "sound" || val == "podcast") {
+                    for (const char* e : {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma", ".opus"}) {
+                        add_ext(e);
+                    }
+                } else if (val == "video" || val == "videos" || val == "movie" || val == "vid") {
+                    for (const char* e : {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".wmv", ".m4v"}) {
+                        add_ext(e);
+                    }
+                } else if (val == "doc" || val == "docs" || val == "document" || val == "documents") {
+                    for (const char* e : {".pdf", ".docx", ".doc", ".odt", ".rtf", ".txt", ".md", ".epub", ".rst"}) {
+                        add_ext(e);
+                    }
+                } else if (val == "sheet" || val == "spreadsheet" || val == "excel") {
+                    for (const char* e : {".xlsx", ".xls", ".csv", ".tsv", ".ods"}) {
+                        add_ext(e);
+                    }
+                } else if (val == "slide" || val == "slides" || val == "presentation" || val == "ppt") {
+                    for (const char* e : {".pptx", ".ppt", ".odp"}) {
+                        add_ext(e);
+                    }
+                } else if (val == "code" || val == "source") {
+                    for (const char* e : {".py", ".cpp", ".c", ".h", ".hpp", ".js", ".ts", ".html", ".htm", ".css", ".json", ".xml", ".yaml", ".yml", ".sh", ".rs", ".go", ".java"}) {
+                        add_ext(e);
+                    }
+                } else {
+                    // Support single or comma-separated extensions: e.g. ext:pdf or ext:png,jpg
+                    size_t pos = 0;
+                    while (pos < val.size()) {
+                        size_t comma = val.find(',', pos);
+                        if (comma == std::string::npos) {
+                            add_ext(val.substr(pos));
+                            break;
+                        }
+                        add_ext(val.substr(pos, comma - pos));
+                        pos = comma + 1;
+                    }
+                }
             }
         } else if (lower_chunk.rfind("path:", 0) == 0 || lower_chunk.rfind("in:", 0) == 0) {
             size_t colon = lower_chunk.find(':');
@@ -388,13 +468,14 @@ std::unordered_set<uint32_t> InvertedIndex::compute_phrase_matching_docs(
 
 std::vector<SearchResult> InvertedIndex::search(const std::string& raw_query,
                                                 size_t max_results) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     if (active_doc_count_ == 0) {
         return {};
     }
 
     ParsedQuery parsed = parse_query(raw_query);
     if (parsed.terms.empty() && parsed.exact_phrases.empty() &&
-        parsed.ext_filter.empty() && parsed.path_filter.empty()) {
+        parsed.allowed_extensions.empty() && parsed.path_filter.empty()) {
         return {};
     }
 
@@ -409,13 +490,14 @@ std::vector<SearchResult> InvertedIndex::search(const std::string& raw_query,
         }
     }
 
-    // Helper to check if a document passes metadata filters (not deleted, ext:, path:, -excl)
+    // Helper to check if a document passes metadata filters (not deleted, ext:/type:, path:, -excl)
     auto passes_filters = [&](uint32_t doc_id) -> bool {
         if (doc_id >= documents_.size()) return false;
         const DocumentMeta& meta = documents_[doc_id];
         if (meta.is_deleted) return false;
         if (excluded_docs.count(doc_id) > 0) return false;
-        if (!parsed.ext_filter.empty() && meta.extension != parsed.ext_filter) {
+        if (!parsed.allowed_extensions.empty() &&
+            parsed.allowed_extensions.find(meta.extension) == parsed.allowed_extensions.end()) {
             return false;
         }
         if (!parsed.path_filter.empty()) {
@@ -639,6 +721,7 @@ std::vector<SearchResult> InvertedIndex::search(const std::string& raw_query,
 
 std::vector<std::string> InvertedIndex::suggest_autocomplete(const std::string& prefix,
                                                              size_t max_words) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     std::string norm_prefix = Tokenizer::normalize_word(prefix);
 
     struct WordFreq {
@@ -682,6 +765,7 @@ std::vector<std::string> InvertedIndex::suggest_autocomplete(const std::string& 
 
 std::vector<std::string> InvertedIndex::get_document_keywords(const std::string& path,
                                                               size_t max_keywords) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = path_to_doc_id_.find(path);
     if (it == path_to_doc_id_.end()) {
         return {};
@@ -723,7 +807,18 @@ std::vector<std::string> InvertedIndex::get_document_keywords(const std::string&
     return out;
 }
 
+size_t InvertedIndex::active_document_count() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return active_doc_count_;
+}
+
+size_t InvertedIndex::vocabulary_size() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return exact_postings_.size();
+}
+
 std::vector<std::string> InvertedIndex::get_all_paths() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     std::vector<std::string> paths;
     paths.reserve(active_doc_count_);
     for (const DocumentMeta& meta : documents_) {
@@ -735,6 +830,7 @@ std::vector<std::string> InvertedIndex::get_all_paths() const {
 }
 
 bool InvertedIndex::save_binary(const std::string& file_path) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
     if (!out) {
         return false;
@@ -870,6 +966,7 @@ bool InvertedIndex::load_binary(const std::string& file_path) {
         return false;
     }
 
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     documents_ = std::move(new_docs);
     path_to_doc_id_ = std::move(new_path_map);
     exact_postings_ = std::move(new_exact);
