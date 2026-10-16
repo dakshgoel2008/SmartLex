@@ -12,23 +12,27 @@ from smartlex.core.watcher import RealTimeFileWatcher
 
 def index_directory(target_dir: str, engine: SmartLexEngine, extensions: list) -> float:
     """Scans and incrementally indexes `target_dir` into `engine`, returning elapsed ms."""
+    import tempfile
+
     t0 = time.perf_counter()
     scanned = scan_directories([target_dir], extensions, 8)
     paths = [rec[0] for rec in scanned]
 
-    batch_dir = Path("all")
-    batch_dir.mkdir(exist_ok=True)
-    batch_file = batch_dir / "cli_batch.txt"
-    with open(batch_file, "w", encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix="_cli_batch.txt", encoding="utf-8", delete=False
+    ) as tmp:
+        batch_file = Path(tmp.name)
         for p in paths:
-            f.write(f"{p}\n")
+            tmp.write(f"{p}\n")
 
-    process_all_batches([str(batch_file)], engine=engine)
-    engine.save()
     try:
-        batch_file.unlink()
-    except OSError:
-        pass
+        process_all_batches([str(batch_file)], engine=engine)
+        engine.save()
+    finally:
+        try:
+            batch_file.unlink()
+        except OSError:
+            pass
     return (time.perf_counter() - t0) * 1000.0
 
 

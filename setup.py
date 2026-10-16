@@ -13,6 +13,12 @@ smartlex_core_ext = Extension(
         "cpp/src/scanner.cpp",
         "cpp/bindings/py_smartlex_core.cpp",
     ],
+    depends=[
+        "cpp/include/smartlex/varint.hpp",
+        "cpp/include/smartlex/tokenizer.hpp",
+        "cpp/include/smartlex/inverted_index.hpp",
+        "cpp/include/smartlex/scanner.hpp",
+    ],
     include_dirs=["cpp/include"],
     language="c++",
     extra_compile_args=extra_compile_args,

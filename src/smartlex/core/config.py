@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 CONFIG_FILE = Path("config.json")
+USER_DATA_DIR = Path.home() / ".smartlex"
 
 DEFAULT_CONFIG = {
     "NUM_PROCESSES": 8,
@@ -66,12 +67,23 @@ DEFAULT_CONFIG = {
 }
 
 
+def get_app_data_dir() -> Path:
+    """
+    Returns `~/.smartlex` for global PyPI installations so SmartLex can be
+    launched from any working directory without scattering index files.
+    """
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return USER_DATA_DIR
+
+
 def load_config() -> dict:
     """
-    Loads configuration from `config.json` and merges it with `DEFAULT_CONFIG`.
-    Normalizes keys to UPPERCASE so lowercase keys in `config.json` work seamlessly.
+    Loads configuration from `./config.json` (when running inside the project repo)
+    or `~/.smartlex/config.json` (when installed globally via PyPI), merging with
+    `DEFAULT_CONFIG`.
     """
     merged = dict(DEFAULT_CONFIG)
+
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -80,4 +92,28 @@ def load_config() -> dict:
                 merged[key.upper()] = value
         except Exception:
             pass
+    else:
+        # Installed globally via pip/PyPI: store index, catalog, and batches in ~/.smartlex/
+        data_dir = get_app_data_dir()
+        user_cfg_file = data_dir / "config.json"
+        if user_cfg_file.exists():
+            try:
+                with open(user_cfg_file, "r", encoding="utf-8") as f:
+                    user_config = json.load(f)
+                for key, value in user_config.items():
+                    merged[key.upper()] = value
+            except Exception:
+                pass
+
+        for path_key in (
+            "INDEX_FOLDER",
+            "OUTPUT_FILE",
+            "INDEX_FILE",
+            "CATALOG_FILE",
+            "AUTOCOMPLETE_FILE",
+        ):
+            val = Path(merged[path_key])
+            if not val.is_absolute():
+                merged[path_key] = str(data_dir / val)
+
     return merged

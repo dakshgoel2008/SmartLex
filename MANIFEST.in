@@ -1,0 +1,8 @@
+include LICENSE
+include readme.md
+include config.json
+include CMakeLists.txt
+recursive-include cpp/include *.hpp
+recursive-include cpp/src *.cpp
+recursive-include cpp/bindings *.cpp
+
