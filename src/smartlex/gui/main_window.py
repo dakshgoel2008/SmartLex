@@ -3,7 +3,7 @@ import sys
 import time
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QHBoxLayout,
@@ -18,8 +18,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from smartlex.core.config import load_config
+from smartlex.core.index_manager import generate_autocomplete
 from smartlex.core.logger import setup_logger
+from smartlex.core.native_engine import SmartLexEngine
+from smartlex.core.scanner import get_available_drives
 from smartlex.core.search_engine import search, search_with_snippets
+from smartlex.core.watcher import RealTimeFileWatcher
 from smartlex.gui.threads import IndexingThread
 from smartlex.gui.widgets import CustomCompleter
 
@@ -27,16 +32,53 @@ logger = setup_logger(__name__)
 
 
 class MyWidget(QWidget):
+    watcher_updated_signal = pyqtSignal()
 
-    def __init__(self, autocomplete_words, index_data):
+    def __init__(self, autocomplete_words, index_data, start_sync_immediately=False):
         super().__init__()
         self.index_data = index_data
         self.autocomplete_words = autocomplete_words
         self.indexing_thread = None
+        self.file_watcher = None
+
         self.search_timer = QTimer()
         self.search_timer.setSingleShot(True)
         self.search_timer.timeout.connect(self._execute_search)
+
+        self.watcher_updated_signal.connect(self._on_watcher_updated)
         self.initUI()
+
+        # Start real-time filesystem watcher if using SmartLexEngine
+        self._start_realtime_watcher()
+
+        if start_sync_immediately:
+            QTimer.singleShot(50, self.trigger_incremental_sync)
+
+    def _start_realtime_watcher(self):
+        if isinstance(self.index_data, SmartLexEngine) and self.file_watcher is None:
+            cfg = load_config()
+            self.file_watcher = RealTimeFileWatcher(
+                engine=self.index_data,
+                watch_roots=get_available_drives(),
+                supported_extensions=cfg["SUPPORTED_FORMATS"],
+                on_index_updated=lambda _eng: self.watcher_updated_signal.emit(),
+            )
+            self.file_watcher.start()
+
+    def _on_watcher_updated(self):
+        if isinstance(self.index_data, SmartLexEngine):
+            cfg = load_config()
+            words = generate_autocomplete(self.index_data, cfg["AUTOCOMPLETE_WORDS"])
+            self.update_index(self.index_data, words, quiet=True)
+            if self.search_input.text().strip():
+                self.perform_search()
+
+    def closeEvent(self, event):
+        if self.file_watcher is not None:
+            self.file_watcher.stop()
+        if self.indexing_thread is not None and self.indexing_thread.isRunning():
+            self.indexing_thread.cancel()
+        super().closeEvent(event)
 
     def initUI(self):
         self.setWindowTitle("SmartLex Search Engine (C++20 Core)")
@@ -46,7 +88,6 @@ class MyWidget(QWidget):
         self.setMinimumSize(900, 650)
         self.resize(1000, 700)
 
-        # Apply Modern Stylesheet
         self.setStyleSheet(
             """
             QWidget {
@@ -164,13 +205,11 @@ class MyWidget(QWidget):
         layout.setSpacing(15)
         layout.setContentsMargins(30, 20, 30, 20)
 
-        # Title label
         title_label = QLabel("SmartLex Search Engine")
         title_label.setObjectName("TitleLabel")
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
 
-        # Search section
         search_layout = QHBoxLayout()
 
         completer = CustomCompleter(self.autocomplete_words, self)
@@ -186,7 +225,6 @@ class MyWidget(QWidget):
         self.search_input.textChanged.connect(self._on_text_changed)
         search_layout.addWidget(self.search_input, stretch=4)
 
-        # Search button
         self.search_button = QPushButton("Search")
         self.search_button.setObjectName("SearchButton")
         self.search_button.setMinimumHeight(50)
@@ -195,7 +233,6 @@ class MyWidget(QWidget):
         self.search_button.setDefault(True)
         search_layout.addWidget(self.search_button)
 
-        # Clear button
         self.clear_button = QPushButton("Clear")
         self.clear_button.setObjectName("ClearButton")
         self.clear_button.setMinimumHeight(50)
@@ -203,18 +240,16 @@ class MyWidget(QWidget):
         self.clear_button.clicked.connect(self.clear_search)
         search_layout.addWidget(self.clear_button)
 
-        # Incremental Sync button
         self.sync_button = QPushButton("Sync")
         self.sync_button.setObjectName("SyncButton")
         self.sync_button.setMinimumHeight(50)
         self.sync_button.setMinimumWidth(90)
-        self.sync_button.setToolTip("Incrementally index new or modified files")
+        self.sync_button.setToolTip("Incrementally index new, modified, or moved files")
         self.sync_button.clicked.connect(self.trigger_incremental_sync)
         search_layout.addWidget(self.sync_button)
 
         layout.addLayout(search_layout)
 
-        # Results header
         results_header = QHBoxLayout()
         results_header.setContentsMargins(5, 10, 5, 0)
 
@@ -228,14 +263,12 @@ class MyWidget(QWidget):
         results_header.addWidget(help_label)
         layout.addLayout(results_header)
 
-        # Result list
         self.result_list = QListWidget()
         self.result_list.setAlternatingRowColors(True)
         self.result_list.itemDoubleClicked.connect(self.open_file)
         self.result_list.setMinimumHeight(400)
         layout.addWidget(self.result_list)
 
-        # Status bar
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet(
             "padding: 10px; background-color: #ffffff; border-radius: 8px; border: 1px solid #e0e6ed; color: #7f8c8d; font-weight: bold;"
@@ -265,16 +298,26 @@ class MyWidget(QWidget):
         if self.indexing_thread and self.indexing_thread.isRunning():
             return
         self.sync_button.setEnabled(False)
-        self.indexing_thread = IndexingThread(self)
+        engine_arg = (
+            self.index_data if isinstance(self.index_data, SmartLexEngine) else None
+        )
+        self.indexing_thread = IndexingThread(self, engine=engine_arg)
         self.indexing_thread.progress.connect(self.status_label.setText)
+
+        def on_tier_ready(live_engine, live_words):
+            self.update_index(live_engine, live_words, quiet=True)
+            if self.search_input.text().strip():
+                self.perform_search()
 
         def on_sync_finished(new_engine, new_words):
             self.sync_button.setEnabled(True)
-            self.update_index(new_engine, new_words)
+            self.update_index(new_engine, new_words, quiet=False)
+            self._start_realtime_watcher()
 
         def on_sync_error(_msg):
             self.sync_button.setEnabled(True)
 
+        self.indexing_thread.tier_ready_signal.connect(on_tier_ready)
         self.indexing_thread.finished_signal.connect(on_sync_finished)
         self.indexing_thread.error_signal.connect(on_sync_error)
         self.indexing_thread.start()
@@ -303,14 +346,15 @@ class MyWidget(QWidget):
             self.result_list.clear()
 
             if not detailed_results:
-                # Fallback in case a custom index object only works with `search()`
                 paths = search(query, self.index_data)
                 detailed_results = [{"path": p, "snippet": ""} for p in paths]
 
             if not detailed_results:
                 self.result_list.addItem("No results found. Try different keywords.")
                 self.results_label.setText("Results: 0")
-                self.status_label.setText(f"No results found for '{query}' ({elapsed_ms:.2f} ms)")
+                self.status_label.setText(
+                    f"No results found for '{query}' ({elapsed_ms:.2f} ms)"
+                )
                 self.status_label.setStyleSheet(
                     "padding: 10px; background-color: #fefce8; border-radius: 8px; border: 1px solid #fef08a; color: #a16207; font-weight: bold;"
                 )
@@ -318,7 +362,9 @@ class MyWidget(QWidget):
                 for res in detailed_results:
                     file_path = res["path"]
                     snippet = res.get("snippet", "")
-                    display_text = f"{file_path}\n    {snippet}" if snippet else file_path
+                    display_text = (
+                        f"{file_path}\n    {snippet}" if snippet else file_path
+                    )
 
                     item = QListWidgetItem(display_text)
                     item.setData(Qt.UserRole, file_path)
@@ -439,7 +485,7 @@ class MyWidget(QWidget):
         else:
             super().keyPressEvent(event)
 
-    def update_index(self, new_index_data, new_autocomplete_words):
+    def update_index(self, new_index_data, new_autocomplete_words, quiet=False):
         self.index_data = new_index_data
         self.autocomplete_words = new_autocomplete_words
 
@@ -448,8 +494,11 @@ class MyWidget(QWidget):
         completer.setCompletionMode(completer.PopupCompletion)
         self.search_input.setCompleter(completer)
 
-        self.status_label.setText(f"Index updated ({len(new_index_data)} files indexed)")
-        self.status_label.setStyleSheet(
-            "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
-        )
+        if not quiet:
+            self.status_label.setText(
+                f"✓ Ready ({len(new_index_data)} files indexed • Live watcher active)"
+            )
+            self.status_label.setStyleSheet(
+                "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
+            )
         logger.info("Index and autocomplete data updated")

@@ -1,17 +1,16 @@
-import concurrent.futures
 import math
 import os
 import string
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import List
 
 from smartlex.core.logger import setup_logger
+from smartlex.core.native_engine import scan_directories
 
 logger = setup_logger(__name__)
 
 EXCLUDE_DIRS = {
-    # Windows system & package folders
     "windows",
     "program files",
     "program files (x86)",
@@ -20,7 +19,6 @@ EXCLUDE_DIRS = {
     "system volume information",
     "$recycle.bin",
     "recovery",
-    # Linux / macOS virtual & system folders
     "proc",
     "sys",
     "dev",
@@ -29,7 +27,6 @@ EXCLUDE_DIRS = {
     "lost+found",
     "timeshift",
     "library",
-    # Developer & build artifact directories
     "node_modules",
     ".git",
     ".hg",
@@ -54,7 +51,7 @@ EXCLUDE_DIRS = {
 }
 
 
-def get_available_drives():
+def get_available_drives() -> List[str]:
     drives = []
     if os.name == "nt":
         for letter in string.ascii_uppercase:
@@ -62,8 +59,6 @@ def get_available_drives():
             if os.path.exists(drive):
                 drives.append(drive)
     else:
-        # On Unix/Linux/macOS, prefer scanning user home directory if accessible,
-        # or root "/" with system virtual filesystems excluded.
         home = os.path.expanduser("~")
         if os.path.exists(home):
             drives.append(home)
@@ -72,59 +67,21 @@ def get_available_drives():
     return drives
 
 
-def scan_dir_parallel(root_path, extensions, progress_callback=None):
-    found_files = []
-    ext_tuple = tuple(ext.lower() for ext in extensions)
+def scan_dir_parallel(root_path: str, extensions: List[str], progress_callback=None) -> List[str]:
+    """
+    Scans `root_path` using the C++20 multi-threaded `FileScanner`.
+    Returns file paths sorted by priority (Desktop/Documents/Downloads first,
+    then newest modification time first).
+    """
+    if progress_callback:
+        progress_callback(f"Scanning {root_path} with C++20 parallel scanner...")
 
-    def scan_task(path):
-        local_found = []
-        subdirs = []
-        try:
-            with os.scandir(path) as it:
-                for entry in it:
-                    try:
-                        name_lower = entry.name.lower()
-                        if entry.is_dir(follow_symlinks=False):
-                            if name_lower not in EXCLUDE_DIRS and not name_lower.startswith("."):
-                                subdirs.append(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            if name_lower.endswith(ext_tuple):
-                                local_found.append(entry.path)
-                    except OSError:
-                        pass
-        except OSError:
-            pass
-        return local_found, subdirs
+    records = scan_directories([str(root_path)], list(extensions), 8)
+    paths = [rec[0] for rec in records]
 
-    last_callback_time = time.time()
-    files_since_last = 0
-
-    with ThreadPoolExecutor(max_workers=32) as pool:
-        futures = {pool.submit(scan_task, root_path)}
-
-        while futures:
-            done, futures = concurrent.futures.wait(
-                futures,
-                timeout=0.05,
-                return_when=concurrent.futures.FIRST_COMPLETED,
-            )
-
-            for f in done:
-                files, dirs = f.result()
-                found_files.extend(files)
-                files_since_last += len(files)
-                for d in dirs:
-                    futures.add(pool.submit(scan_task, d))
-
-            if progress_callback and (time.time() - last_callback_time > 0.3):
-                if files_since_last > 0:
-                    progress_callback(
-                        f"Scanning {root_path}... Found {len(found_files)} files so far"
-                    )
-                    files_since_last = 0
-                    last_callback_time = time.time()
-
-    return found_files
+    if progress_callback:
+        progress_callback(f"Scanned {root_path}: found {len(paths)} files.")
+    return paths
 
 
 def scan_all_drives(extensions, num_processes, output_folder, progress_callback=None):
@@ -133,7 +90,7 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
 
     for drive in drives:
         if progress_callback:
-            progress_callback(f"Starting scan on {drive}")
+            progress_callback(f"Starting C++20 scan on {drive}")
 
         start_time = time.time()
         files = scan_dir_parallel(drive, extensions, progress_callback)
@@ -145,9 +102,7 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
 
     total_files = len(all_found_files)
     if progress_callback:
-        progress_callback(
-            f"Scan complete. Found {total_files} total files."
-        )
+        progress_callback(f"Scan complete. Found {total_files} total files.")
 
     out_dir = Path(output_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -180,4 +135,3 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
         batch_files.append(str(batch_file))
 
     return batch_files
-

@@ -1,4 +1,3 @@
-import os
 import sys
 from setuptools import Extension, setup
 
@@ -11,6 +10,7 @@ smartlex_core_ext = Extension(
     sources=[
         "cpp/src/tokenizer.cpp",
         "cpp/src/inverted_index.cpp",
+        "cpp/src/scanner.cpp",
         "cpp/bindings/py_smartlex_core.cpp",
     ],
     include_dirs=["cpp/include"],
@@ -20,4 +20,3 @@ smartlex_core_ext = Extension(
 
 if __name__ == "__main__":
     setup(ext_modules=[smartlex_core_ext])
-

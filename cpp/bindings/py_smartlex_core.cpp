@@ -2,6 +2,7 @@
 #include <Python.h>
 
 #include "smartlex/inverted_index.hpp"
+#include "smartlex/scanner.hpp"
 #include "smartlex/tokenizer.hpp"
 
 #include <exception>
@@ -74,8 +75,27 @@ PyObject* PyNativeIndex_remove_document(PyNativeIndexObject* self, PyObject* arg
     if (!PyArg_ParseTuple(args, "s", &path)) {
         return nullptr;
     }
-    bool removed = self->index->remove_document(path);
+    bool removed = false;
+    std::string s_path(path);
+    Py_BEGIN_ALLOW_THREADS
+    removed = self->index->remove_document(s_path);
+    Py_END_ALLOW_THREADS
     return PyBool_FromLong(removed ? 1 : 0);
+}
+
+PyObject* PyNativeIndex_rename_document(PyNativeIndexObject* self, PyObject* args) {
+    const char* old_path = nullptr;
+    const char* new_path = nullptr;
+    if (!PyArg_ParseTuple(args, "ss", &old_path, &new_path)) {
+        return nullptr;
+    }
+    bool renamed = false;
+    std::string s_old(old_path);
+    std::string s_new(new_path);
+    Py_BEGIN_ALLOW_THREADS
+    renamed = self->index->rename_document(s_old, s_new);
+    Py_END_ALLOW_THREADS
+    return PyBool_FromLong(renamed ? 1 : 0);
 }
 
 PyObject* PyNativeIndex_is_up_to_date(PyNativeIndexObject* self, PyObject* args) {
@@ -267,6 +287,8 @@ PyMethodDef PyNativeIndex_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "Add or update a document in the inverted index."},
     {"remove_document", _PyCFunction_CAST(PyNativeIndex_remove_document),
      METH_VARARGS, "Mark a document path as deleted (tombstone) in O(1) time."},
+    {"rename_document", _PyCFunction_CAST(PyNativeIndex_rename_document),
+     METH_VARARGS, "Rename or move an indexed document path in O(1) time."},
     {"is_up_to_date", _PyCFunction_CAST(PyNativeIndex_is_up_to_date),
      METH_VARARGS, "Check if a file path is already indexed with the same mtime_ns and size."},
     {"search", _PyCFunction_CAST(PyNativeIndex_search),
@@ -303,6 +325,71 @@ PyTypeObject PyNativeIndexType = []() {
     t.tp_new = PyNativeIndex_new;
     return t;
 }();
+
+// Helper to convert a Python sequence of strings into std::vector<std::string>
+bool py_sequence_to_string_vector(PyObject* obj, std::vector<std::string>& out) {
+    PyObject* seq = PySequence_Fast(obj, "Expected a sequence of strings");
+    if (!seq) {
+        return false;
+    }
+    Py_ssize_t len = PySequence_Fast_GET_SIZE(seq);
+    out.reserve(static_cast<size_t>(len));
+    for (Py_ssize_t i = 0; i < len; ++i) {
+        PyObject* item = PySequence_Fast_GET_ITEM(seq, i);
+        const char* s = PyUnicode_AsUTF8(item);
+        if (!s) {
+            Py_DECREF(seq);
+            return false;
+        }
+        out.emplace_back(s);
+    }
+    Py_DECREF(seq);
+    return true;
+}
+
+// Module-level helper: scan_directories(root_paths, extensions, num_threads=8)
+// Returns list of (path, mtime_ns, file_size, priority_tier) sorted by priority & recency.
+PyObject* py_scan_directories(PyObject* /*self*/, PyObject* args, PyObject* kwds) {
+    static const char* kwlist[] = {"root_paths", "extensions", "num_threads", nullptr};
+    PyObject* py_roots = nullptr;
+    PyObject* py_exts = nullptr;
+    Py_ssize_t num_threads = 8;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|n", const_cast<char**>(kwlist),
+                                     &py_roots, &py_exts, &num_threads)) {
+        return nullptr;
+    }
+
+    std::vector<std::string> roots;
+    std::vector<std::string> exts;
+    if (!py_sequence_to_string_vector(py_roots, roots) ||
+        !py_sequence_to_string_vector(py_exts, exts)) {
+        return nullptr;
+    }
+
+    size_t threads = (num_threads > 0) ? static_cast<size_t>(num_threads) : 8;
+    std::vector<smartlex::ScannedFile> files;
+
+    Py_BEGIN_ALLOW_THREADS
+    files = smartlex::FileScanner::scan_directories(roots, exts, threads);
+    Py_END_ALLOW_THREADS
+
+    PyObject* py_list = PyList_New(static_cast<Py_ssize_t>(files.size()));
+    if (!py_list) return nullptr;
+
+    for (size_t i = 0; i < files.size(); ++i) {
+        const auto& f = files[i];
+        PyObject* tuple = Py_BuildValue(
+            "(sKKi)",
+            f.path.c_str(),
+            static_cast<unsigned long long>(f.mtime_ns),
+            static_cast<unsigned long long>(f.file_size),
+            f.priority_tier
+        );
+        PyList_SET_ITEM(py_list, static_cast<Py_ssize_t>(i), tuple);
+    }
+    return py_list;
+}
 
 // Module-level helper: tokenize_keywords(text, include_stopwords=False)
 PyObject* py_tokenize_keywords(PyObject* /*self*/, PyObject* args, PyObject* kwds) {
@@ -354,6 +441,8 @@ PyObject* py_edit_distance(PyObject* /*self*/, PyObject* args) {
 }
 
 PyMethodDef module_methods[] = {
+    {"scan_directories", _PyCFunction_CAST(py_scan_directories),
+     METH_VARARGS | METH_KEYWORDS, "Parallel C++20 directory scanner returning priority-sorted files."},
     {"tokenize_keywords", _PyCFunction_CAST(py_tokenize_keywords),
      METH_VARARGS | METH_KEYWORDS, "Tokenize text into normalized keywords using C++20 Tokenizer."},
     {"stem_word", py_stem_word, METH_VARARGS, "Compute Porter-style English stem of a word."},
