@@ -1,3 +1,4 @@
+import concurrent.futures
 import math
 import os
 import string
@@ -10,17 +11,46 @@ from smartlex.core.logger import setup_logger
 logger = setup_logger(__name__)
 
 EXCLUDE_DIRS = {
+    # Windows system & package folders
     "windows",
     "program files",
     "program files (x86)",
+    "programdata",
     "appdata",
-    "node_modules",
-    ".git",
-    "venv",
-    ".venv",
-    "__pycache__",
     "system volume information",
     "$recycle.bin",
+    "recovery",
+    # Linux / macOS virtual & system folders
+    "proc",
+    "sys",
+    "dev",
+    "run",
+    "snap",
+    "lost+found",
+    "timeshift",
+    "library",
+    # Developer & build artifact directories
+    "node_modules",
+    ".git",
+    ".hg",
+    ".svn",
+    "venv",
+    ".venv",
+    "env",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".tox",
+    ".cache",
+    ".npm",
+    ".cargo",
+    ".rustup",
+    ".dotnet",
+    ".gemini",
+    "site-packages",
+    "dist-packages",
+    "build",
+    "dist",
 }
 
 
@@ -32,13 +62,19 @@ def get_available_drives():
             if os.path.exists(drive):
                 drives.append(drive)
     else:
-        # for Unix type systems
-        drives.append("/")
+        # On Unix/Linux/macOS, prefer scanning user home directory if accessible,
+        # or root "/" with system virtual filesystems excluded.
+        home = os.path.expanduser("~")
+        if os.path.exists(home):
+            drives.append(home)
+        else:
+            drives.append("/")
     return drives
 
 
 def scan_dir_parallel(root_path, extensions, progress_callback=None):
     found_files = []
+    ext_tuple = tuple(ext.lower() for ext in extensions)
 
     def scan_task(path):
         local_found = []
@@ -47,57 +83,47 @@ def scan_dir_parallel(root_path, extensions, progress_callback=None):
             with os.scandir(path) as it:
                 for entry in it:
                     try:
+                        name_lower = entry.name.lower()
                         if entry.is_dir(follow_symlinks=False):
-                            if entry.name.lower() not in EXCLUDE_DIRS:
+                            if name_lower not in EXCLUDE_DIRS and not name_lower.startswith("."):
                                 subdirs.append(entry.path)
                         elif entry.is_file(follow_symlinks=False):
-                            if any(
-                                entry.name.lower().endswith(ext) for ext in extensions
-                            ):
+                            if name_lower.endswith(ext_tuple):
                                 local_found.append(entry.path)
-                    except Exception:
+                    except OSError:
                         pass
-        except Exception:
-            # Handle permission errors or missing directories silently
+        except OSError:
             pass
         return local_found, subdirs
-
-    # Use a thread pool to traverse directories concurrently
-    # Max workers is 32 to maximize I/O throughput
-    pool = ThreadPoolExecutor(max_workers=32)
-    futures = set([pool.submit(scan_task, root_path)])
 
     last_callback_time = time.time()
     files_since_last = 0
 
-    while futures:
-        done = []
-        for f in list(futures):
-            if f.done():
-                done.append(f)
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        futures = {pool.submit(scan_task, root_path)}
 
-        if not done:
-            time.sleep(0.01)
-            continue
+        while futures:
+            done, futures = concurrent.futures.wait(
+                futures,
+                timeout=0.05,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
 
-        for f in done:
-            futures.remove(f)
-            files, dirs = f.result()
-            found_files.extend(files)
-            files_since_last += len(files)
-            for d in dirs:
-                futures.add(pool.submit(scan_task, d))
+            for f in done:
+                files, dirs = f.result()
+                found_files.extend(files)
+                files_since_last += len(files)
+                for d in dirs:
+                    futures.add(pool.submit(scan_task, d))
 
-        # Call progress callback periodically (e.g. every 0.5s) if there's activity
-        if progress_callback and (time.time() - last_callback_time > 0.5):
-            if files_since_last > 0:
-                progress_callback(
-                    f"Scanning {root_path}... Found {len(found_files)} files so far"
-                )
-                files_since_last = 0
-                last_callback_time = time.time()
+            if progress_callback and (time.time() - last_callback_time > 0.3):
+                if files_since_last > 0:
+                    progress_callback(
+                        f"Scanning {root_path}... Found {len(found_files)} files so far"
+                    )
+                    files_since_last = 0
+                    last_callback_time = time.time()
 
-    pool.shutdown()
     return found_files
 
 
@@ -107,7 +133,7 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
 
     for drive in drives:
         if progress_callback:
-            progress_callback(f"Starting scan on drive {drive}")
+            progress_callback(f"Starting scan on {drive}")
 
         start_time = time.time()
         files = scan_dir_parallel(drive, extensions, progress_callback)
@@ -120,14 +146,12 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
     total_files = len(all_found_files)
     if progress_callback:
         progress_callback(
-            f"Scan complete. Found {total_files} total files across all drives."
+            f"Scan complete. Found {total_files} total files."
         )
 
-    # Ensure output folder exists
     out_dir = Path(output_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clear old batches
     for old_file in out_dir.glob("pdf_part_*.txt"):
         try:
             old_file.unlink()
@@ -137,8 +161,7 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
     if total_files == 0:
         return []
 
-    # Split files into batches
-    batch_size = max(1, math.ceil(total_files / num_processes))
+    batch_size = max(1, math.ceil(total_files / max(1, num_processes)))
     batch_files = []
 
     for i in range(num_processes):
@@ -157,3 +180,4 @@ def scan_all_drives(extensions, num_processes, output_folder, progress_callback=
         batch_files.append(str(batch_file))
 
     return batch_files
+

@@ -1,13 +1,37 @@
+# Runtime & Index Data
 /all
 /backups
 /logs
 output.json
+*.slex
+smartlex_catalog.db*
 search_engine.log
-__pycache__
 autocomplete_words.json
 
-# PyInstaller / Build artifacts
+# Python Cache & Environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# C++ / CMake / PyInstaller Build Artifacts
 /build
+/build_*
 /dist
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
 *.spec
-*.egg-info
+*.egg-info/
+*.so
+*.pyd
+*.dll
+*.dylib
+*.o
+*.obj
+*.a
+*.lib

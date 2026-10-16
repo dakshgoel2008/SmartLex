@@ -1,11 +1,22 @@
 {
-  "num_processes": 8,
-  "top_keywords": 150,
-  "autocomplete_words": 100,
-  "supported_formats": [
+  "NUM_PROCESSES": 8,
+  "TOP_KEYWORDS": 150,
+  "AUTOCOMPLETE_WORDS": 200,
+  "SUPPORTED_FORMATS": [
     ".pdf",
-    ".docx"
+    ".docx",
+    ".txt",
+    ".md",
+    ".csv",
+    ".json",
+    ".py",
+    ".cpp",
+    ".h",
+    ".html"
   ],
-  "index_folder": "all",
-  "output_file": "output.json"
+  "INDEX_FOLDER": "all",
+  "OUTPUT_FILE": "output.json",
+  "INDEX_FILE": "index.slex",
+  "CATALOG_FILE": "smartlex_catalog.db",
+  "AUTOCOMPLETE_FILE": "autocomplete_words.json"
 }

@@ -1,6 +1,4 @@
 import json
-import os
-import subprocess
 from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -16,7 +14,7 @@ logger = setup_logger(__name__)
 
 class IndexingThread(QThread):
     progress = pyqtSignal(str)
-    finished_signal = pyqtSignal(dict, list)
+    finished_signal = pyqtSignal(object, list)
     error_signal = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -33,12 +31,10 @@ class IndexingThread(QThread):
             if self._is_cancelled:
                 return
 
-            self._emit_progress("Starting indexing process...")
+            self._emit_progress("Starting incremental indexing...")
 
-            # Step 1 & 2: Scan all drives and create batch files
-            self._emit_progress(
-                "Scanning all system drives for documents. This may take a moment..."
-            )
+            # Step 1 & 2: Scan drives and create batch files
+            self._emit_progress("Scanning drives for documents...")
             batch_files = scan_all_drives(
                 extensions=self.cfg["SUPPORTED_FORMATS"],
                 num_processes=self.cfg["NUM_PROCESSES"],
@@ -54,34 +50,39 @@ class IndexingThread(QThread):
                 self._emit_error("No documents found on the system.")
                 return
 
-            # Step 3: Process files
+            # Step 3: Process new/modified files into the C++20 Inverted Index
             self._emit_progress(
-                f"Processing {len(batch_files)} batch(es) in parallel..."
+                f"Processing {len(batch_files)} batch(es) with C++20 engine..."
             )
-            D = process_all_batches(batch_files, self.cfg["TOP_KEYWORDS"])
+            engine = process_all_batches(
+                batch_files,
+                self.cfg["TOP_KEYWORDS"],
+                progress_callback=self._emit_progress,
+            )
 
             if self._is_cancelled:
                 self._emit_progress("Indexing cancelled")
                 return
 
-            if not D:
+            if not engine:
                 self._emit_error(
-                    "No data indexed. Check if PDF files exist in specified directories."
+                    "No data indexed. Check if supported files exist in specified directories."
                 )
                 return
 
-            # Step 4: Save index
-            self._emit_progress("Saving index to disk...")
-            save_index(D, self.cfg["OUTPUT_FILE"])
-            self._emit_progress(f"Index saved with {len(D)} entries")
+            # Step 4: Save compressed binary index (.slex)
+            self._emit_progress("Saving compressed binary index to disk...")
+            index_target = self.cfg.get("INDEX_FILE", self.cfg["OUTPUT_FILE"])
+            save_index(engine, index_target)
+            self._emit_progress(f"Index saved with {len(engine)} entries")
 
             if self._is_cancelled:
                 self._emit_progress("Indexing cancelled")
                 return
 
             # Step 5: Generate autocomplete
-            self._emit_progress("Generating autocomplete data...")
-            words = generate_autocomplete(D, self.cfg["AUTOCOMPLETE_WORDS"])
+            self._emit_progress("Generating autocomplete vocabulary...")
+            words = generate_autocomplete(engine, self.cfg["AUTOCOMPLETE_WORDS"])
 
             autocomplete_path = Path(self.cfg["AUTOCOMPLETE_FILE"])
             autocomplete_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,9 +94,9 @@ class IndexingThread(QThread):
 
             # Finish
             self._emit_progress("✓ Indexing completed successfully!")
-            self.finished_signal.emit(D, words)
+            self.finished_signal.emit(engine, words)
             logger.info(
-                f"Indexing completed: {len(D)} files indexed, {len(words)} autocomplete words"
+                f"Indexing completed: {len(engine)} files indexed, {len(words)} autocomplete words"
             )
 
         except Exception as e:

@@ -1,23 +1,26 @@
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QFont, QKeySequence
+from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
+    QMessageBox,
     QPushButton,
+    QShortcut,
     QVBoxLayout,
     QWidget,
-    QLabel,
-    QHBoxLayout,
-    QMessageBox,
-    QShortcut,
 )
 
 from smartlex.core.logger import setup_logger
-from smartlex.core.search_engine import search
+from smartlex.core.search_engine import search, search_with_snippets
+from smartlex.gui.threads import IndexingThread
 from smartlex.gui.widgets import CustomCompleter
 
 logger = setup_logger(__name__)
@@ -29,13 +32,14 @@ class MyWidget(QWidget):
         super().__init__()
         self.index_data = index_data
         self.autocomplete_words = autocomplete_words
+        self.indexing_thread = None
         self.search_timer = QTimer()
         self.search_timer.setSingleShot(True)
         self.search_timer.timeout.connect(self._execute_search)
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle("Lexical Search Engine")
+        self.setWindowTitle("SmartLex Search Engine (C++20 Core)")
         icon_path = Path("icon.png")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
@@ -98,16 +102,16 @@ class MyWidget(QWidget):
             QPushButton#SearchButton:pressed {
                 background-color: #21618c;
             }
-            QPushButton#ClearButton {
+            QPushButton#ClearButton, QPushButton#SyncButton {
                 background-color: #ffffff;
                 color: #7f8c8d;
                 border: 2px solid #bdc3c7;
             }
-            QPushButton#ClearButton:hover {
+            QPushButton#ClearButton:hover, QPushButton#SyncButton:hover {
                 background-color: #ecf0f1;
                 color: #2c3e50;
             }
-            QPushButton#ClearButton:pressed {
+            QPushButton#ClearButton:pressed, QPushButton#SyncButton:pressed {
                 background-color: #bdc3c7;
             }
             QListWidget {
@@ -161,7 +165,7 @@ class MyWidget(QWidget):
         layout.setContentsMargins(30, 20, 30, 20)
 
         # Title label
-        title_label = QLabel("Lexical Search Engine")
+        title_label = QLabel("SmartLex Search Engine")
         title_label.setObjectName("TitleLabel")
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
@@ -169,7 +173,6 @@ class MyWidget(QWidget):
         # Search section
         search_layout = QHBoxLayout()
 
-        # Search input with improved styling
         completer = CustomCompleter(self.autocomplete_words, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setCompletionMode(completer.PopupCompletion)
@@ -177,13 +180,13 @@ class MyWidget(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setCompleter(completer)
         self.search_input.setPlaceholderText(
-            "Search documents by keywords... (e.g. 'invoice 2024')"
+            'Search keywords, "exact phrase", ext:pdf, path:docs, -exclude (e.g. invoice 2024)'
         )
         self.search_input.setMinimumHeight(50)
         self.search_input.textChanged.connect(self._on_text_changed)
         search_layout.addWidget(self.search_input, stretch=4)
 
-        # Search button with improved styling
+        # Search button
         self.search_button = QPushButton("Search")
         self.search_button.setObjectName("SearchButton")
         self.search_button.setMinimumHeight(50)
@@ -199,6 +202,15 @@ class MyWidget(QWidget):
         self.clear_button.setMinimumWidth(100)
         self.clear_button.clicked.connect(self.clear_search)
         search_layout.addWidget(self.clear_button)
+
+        # Incremental Sync button
+        self.sync_button = QPushButton("Sync")
+        self.sync_button.setObjectName("SyncButton")
+        self.sync_button.setMinimumHeight(50)
+        self.sync_button.setMinimumWidth(90)
+        self.sync_button.setToolTip("Incrementally index new or modified files")
+        self.sync_button.clicked.connect(self.trigger_incremental_sync)
+        search_layout.addWidget(self.sync_button)
 
         layout.addLayout(search_layout)
 
@@ -216,7 +228,7 @@ class MyWidget(QWidget):
         results_header.addWidget(help_label)
         layout.addLayout(results_header)
 
-        # Result list with improved styling
+        # Result list
         self.result_list = QListWidget()
         self.result_list.setAlternatingRowColors(True)
         self.result_list.itemDoubleClicked.connect(self.open_file)
@@ -233,23 +245,39 @@ class MyWidget(QWidget):
         self.setLayout(layout)
         self.search_input.setFocus()
 
-        # Add keyboard shortcuts
         self._setup_shortcuts()
 
     def _setup_shortcuts(self):
-        # Ctrl+F to focus search
         focus_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         focus_shortcut.activated.connect(self.search_input.setFocus)
 
-        # Escape to clear search
         escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         escape_shortcut.activated.connect(self.clear_search)
 
     def _on_text_changed(self, text):
-        pass
+        if text.strip():
+            self.search_timer.start(150)
 
     def _execute_search(self):
         self.perform_search()
+
+    def trigger_incremental_sync(self):
+        if self.indexing_thread and self.indexing_thread.isRunning():
+            return
+        self.sync_button.setEnabled(False)
+        self.indexing_thread = IndexingThread(self)
+        self.indexing_thread.progress.connect(self.status_label.setText)
+
+        def on_sync_finished(new_engine, new_words):
+            self.sync_button.setEnabled(True)
+            self.update_index(new_engine, new_words)
+
+        def on_sync_error(_msg):
+            self.sync_button.setEnabled(True)
+
+        self.indexing_thread.finished_signal.connect(on_sync_finished)
+        self.indexing_thread.error_signal.connect(on_sync_error)
+        self.indexing_thread.start()
 
     def perform_search(self):
         query = self.search_input.text().strip()
@@ -268,33 +296,48 @@ class MyWidget(QWidget):
             )
             self.search_button.setEnabled(False)
 
-            # Perform search
-            results = search(query, self.index_data)
+            t0 = time.perf_counter()
+            detailed_results = search_with_snippets(query, self.index_data)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-            # Update results
             self.result_list.clear()
 
-            if not results:
+            if not detailed_results:
+                # Fallback in case a custom index object only works with `search()`
+                paths = search(query, self.index_data)
+                detailed_results = [{"path": p, "snippet": ""} for p in paths]
+
+            if not detailed_results:
                 self.result_list.addItem("No results found. Try different keywords.")
                 self.results_label.setText("Results: 0")
-                self.status_label.setText(f"No results found for '{query}'")
+                self.status_label.setText(f"No results found for '{query}' ({elapsed_ms:.2f} ms)")
                 self.status_label.setStyleSheet(
                     "padding: 10px; background-color: #fefce8; border-radius: 8px; border: 1px solid #fef08a; color: #a16207; font-weight: bold;"
                 )
             else:
-                for file in results:
-                    self.result_list.addItem(file)
+                for res in detailed_results:
+                    file_path = res["path"]
+                    snippet = res.get("snippet", "")
+                    display_text = f"{file_path}\n    {snippet}" if snippet else file_path
+
+                    item = QListWidgetItem(display_text)
+                    item.setData(Qt.UserRole, file_path)
+                    if snippet:
+                        item.setToolTip(snippet)
+                    self.result_list.addItem(item)
 
                 self.result_list.setCurrentRow(0)
-                self.results_label.setText(f"Results: {len(results)}")
+                self.results_label.setText(f"Results: {len(detailed_results)}")
                 self.status_label.setText(
-                    f"Found {len(results)} result(s) for '{query}'"
+                    f"Found {len(detailed_results)} result(s) for '{query}' in {elapsed_ms:.2f} ms"
                 )
                 self.status_label.setStyleSheet(
                     "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
                 )
 
-                logger.info(f"Search query '{query}' returned {len(results)} results")
+                logger.info(
+                    f"Search query '{query}' returned {len(detailed_results)} results in {elapsed_ms:.2f}ms"
+                )
 
         except Exception as e:
             error_msg = f"Search error: {str(e)}"
@@ -311,6 +354,7 @@ class MyWidget(QWidget):
             self.search_button.setEnabled(True)
 
     def clear_search(self):
+        self.search_timer.stop()
         self.search_input.clear()
         self.result_list.clear()
         self.results_label.setText("Results: 0")
@@ -321,7 +365,7 @@ class MyWidget(QWidget):
         self.search_input.setFocus()
 
     def open_file(self, item):
-        file_path = item.text()
+        file_path = item.data(Qt.UserRole) or item.text().split("\n")[0]
 
         if file_path in (
             "No results found. Try different keywords.",
@@ -343,9 +387,9 @@ class MyWidget(QWidget):
         try:
             if sys.platform == "win32":
                 subprocess.Popen(["start", "", file_path], shell=True)
-            elif sys.platform == "darwin":  # macOS
+            elif sys.platform == "darwin":
                 subprocess.Popen(["open", file_path])
-            else:  # Linux and others
+            else:
                 subprocess.Popen(["xdg-open", file_path])
 
             self.status_label.setText(f"Opened: {file.name}")
@@ -399,13 +443,12 @@ class MyWidget(QWidget):
         self.index_data = new_index_data
         self.autocomplete_words = new_autocomplete_words
 
-        # Update completer with new words
         completer = CustomCompleter(new_autocomplete_words, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setCompletionMode(completer.PopupCompletion)
         self.search_input.setCompleter(completer)
 
-        self.status_label.setText("Index updated successfully")
+        self.status_label.setText(f"Index updated ({len(new_index_data)} files indexed)")
         self.status_label.setStyleSheet(
             "padding: 10px; background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; color: #166534; font-weight: bold;"
         )
