@@ -128,7 +128,7 @@ def process_all_batches(
             f"Index up-to-date ({len(unchanged)} unchanged, {len(moved)} moved, {len(deleted)} deleted)."
         )
         if progress_callback:
-            progress_callback(f"✓ Index up-to-date ({len(engine)} files ready)")
+            progress_callback(f"Index up-to-date ({len(engine)} files ready)")
         if on_tier_ready:
             on_tier_ready(engine)
         return engine
@@ -141,7 +141,7 @@ def process_all_batches(
         )
         if progress_callback:
             progress_callback(
-                f"⚡ Tier-0 ready: {len(engine)} files searchable by name! Extracting contents..."
+                f"Tier-0 ready: {len(engine)} files searchable by name! Extracting contents..."
             )
         if on_tier_ready:
             on_tier_ready(engine)

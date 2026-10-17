@@ -53,14 +53,14 @@ CATEGORY_DISPLAY_NAMES = {
 }
 
 CATEGORY_ICONS = {
-    "doc": "📄",
-    "sheet": "📊",
-    "slide": "📽️",
-    "image": "🖼️",
-    "audio": "🎵",
-    "video": "🎬",
-    "code": "💻",
-    "": "📁",
+    "doc": "",
+    "sheet": "",
+    "slide": "",
+    "image": "",
+    "audio": "",
+    "video": "",
+    "code": "",
+    "": "",
 }
 
 

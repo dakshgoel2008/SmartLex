@@ -52,7 +52,8 @@ class FilterPillBar(QWidget):
         layout.setSpacing(8)
 
         for category in FILTER_CATEGORIES:
-            button = QPushButton(f"{category.icon}  {category.label}")
+            button_text = f"{category.icon}  {category.label}".strip()
+            button = QPushButton(button_text)
             button.setObjectName("FilterPill")
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
@@ -86,7 +87,7 @@ class ResultCard(QFrame):
     """
     Displays one search result:
 
-        📄  invoice_2024.pdf
+        invoice_2024.pdf
             /home/user/Documents/Finance
             ...the total due for invoice 2024 is $1,250...
             PDF Document  •  1.4 MB  •  Modified 16 Oct 2026, 21:24
@@ -100,7 +101,11 @@ class ResultCard(QFrame):
 
         icon_label = QLabel(details.icon)
         icon_label.setObjectName("CardIcon")
-        icon_label.setFixedWidth(40)
+        if details.icon:
+            icon_label.setFixedWidth(40)
+        else:
+            icon_label.setFixedWidth(0)
+            icon_label.hide()
         icon_label.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
 
         # File names and folders are shown as PLAIN text so a file called

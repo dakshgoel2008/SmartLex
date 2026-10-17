@@ -54,8 +54,8 @@ smartlex
 
 Whether you use the `.exe` or the `smartlex` terminal command, the application will automatically detect if it is your first time running it. It will launch a background scanner that sweeps your drives for PDFs and Word documents, extracts their keywords using advanced NLP, and builds your local index.
 
-⏱️ **First run**: Depends on the number of files (usually a few minutes)
-⏱️ **Subsequent runs**: Instant! The UI will pop open in less than a second.
+**First run**: Depends on the number of files (usually a few minutes)
+**Subsequent runs**: Instant! The UI will pop open in less than a second.
 
 ### Regular Usage
 
@@ -86,15 +86,15 @@ User Query → RAKE Extraction → Keyword Matching → Ranking → Results
 
 ### Step-by-Step Process
 
-#### 1️ **File Collection** (First Run Only)
+#### 1. **File Collection** (First Run Only)
 -   The internal Python scanner recursively sweeps all connected system drives.
 -   It strictly filters out system folders (`Windows`, `Program Files`, `.git`) for maximum speed.
 -   It collects all PDF and DOCX file paths.
 
-#### 2️ **Parallel Indexing** (First Run Only)
+#### 2. **Parallel Indexing** (First Run Only)
 -   Multiple background threads parse the documents simultaneously to maximize CPU efficiency.
 
-#### 3️ **Keyword Extraction** (RAKE Algorithm)
+#### 3. **Keyword Extraction** (RAKE Algorithm)
 ```text
 Input: "Machine learning algorithms use neural networks"
         ↓
@@ -105,7 +105,7 @@ Extract phrases: ["machine learning algorithms", "neural networks"]
 Split to words: ["machine", "learning", "algorithms", "neural", "networks"]
 ```
 
-#### 4️ **Index Storage**
+#### 4. **Index Storage**
 The system builds an ultra-fast lookup dictionary (`output.json`):
 ```json
 {
@@ -114,7 +114,7 @@ The system builds an ultra-fast lookup dictionary (`output.json`):
 }
 ```
 
-#### 5️ **Search Process**
+#### 5. **Search Process**
 ```text
 User types: "neural network training"
         ↓
@@ -158,10 +158,10 @@ SmartLex/
 ---
 
 ## Sample Screenshots
-- ### 🪟 Initial Window
+- ### Initial Window
 ![Initial Window](images/Initial_Window.png)
 
-### 📄 Output Window
+### Output Window
 
 ![Output Window](images/Output_Window.png)
 

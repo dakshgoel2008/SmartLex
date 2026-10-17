@@ -16,7 +16,7 @@ def check_python_version():
     print(f"Python version: {version.major}.{version.minor}.{version.micro}")
 
     if version.major < 3 or (version.major == 3 and version.minor < 8):
-        print("❌ Error: Python 3.8 or higher required!")
+        print("Error: Python 3.8 or higher required!")
         return False
 
     print("SUCCESSFUL: Python version OK")
@@ -34,7 +34,7 @@ def install_dependencies():
         print("SUCCESSFUL: Dependencies installed successfully")
         return True
     except subprocess.CalledProcessError:
-        print("❌ Error installing dependencies")
+        print("Error installing dependencies")
         return False
 
 
@@ -127,9 +127,9 @@ def run_tests():
 
 
 def main():
-    print("\n" + "🚀" * 30)
+    print("\n" + "=" * 60)
     print("  LEXICAL SEARCH ENGINE - SETUP")
-    print("🚀" * 30)
+    print("=" * 60)
 
     steps = [
         ("Checking Python version", check_python_version),
@@ -160,7 +160,7 @@ def main():
         print("   python searchEngine.py")
         print("   (It will automatically scan and index your files on the first run)")
     else:
-        print("⚠️ ERROR: Setup completed with some issues:")
+        print("ERROR: Setup completed with some issues:")
         for step in failed_steps:
             print(f"   ERROR: {step}")
         print("\nPlease resolve the issues above and try again.")

@@ -91,7 +91,7 @@ class IndexingThread(QThread):
                 json.dump(words, f, indent=2)
 
             self._emit_progress(
-                f"✓ Ready — {len(engine)} files indexed & live watcher active"
+                f"Ready — {len(engine)} files indexed & live watcher active"
             )
             self.finished_signal.emit(engine, words)
             logger.info(
@@ -110,4 +110,4 @@ class IndexingThread(QThread):
     def _emit_error(self, message):
         logger.error(message)
         self.error_signal.emit(message)
-        self.progress.emit(f"✗ ERROR: {message}")
+        self.progress.emit(f"ERROR: {message}")

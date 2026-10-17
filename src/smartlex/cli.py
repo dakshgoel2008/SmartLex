@@ -41,7 +41,7 @@ def print_results(query: str, engine: SmartLexEngine) -> None:
     results = search_with_snippets(query, engine, max_results=15)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-    print(f"\n🔎 Query: '{query}' — {len(results)} result(s) in {elapsed_ms:.3f} ms")
+    print(f"\nQuery: '{query}' — {len(results)} result(s) in {elapsed_ms:.3f} ms")
     print("-" * 76)
     if not results:
         print("  No matching documents found.")
@@ -70,14 +70,14 @@ def interactive_loop(target_dir: str) -> None:
     engine.load()
 
     print("=" * 76)
-    print("  🚀 SmartLex C++20 Search Engine — Interactive Terminal Mode")
+    print("  SmartLex C++20 Search Engine — Interactive Terminal Mode")
     print("=" * 76)
     print(f"  Target Directory : {os.path.abspath(target_dir)}")
     print(f"  Supported Formats: {', '.join(extensions)}")
 
     elapsed_ms = index_directory(target_dir, engine, extensions)
     print(
-        f"  ✓ Indexed {len(engine)} active files "
+        f"  Indexed {len(engine)} active files "
         f"({engine.native_index.vocabulary_size()} unique terms) in {elapsed_ms:.1f} ms"
     )
 
@@ -89,7 +89,7 @@ def interactive_loop(target_dir: str) -> None:
         poll_interval=1.0,
     )
     watcher.start()
-    print("  👁️  Real-Time File Watcher: ACTIVE (try creating/renaming/editing a file!)")
+    print("  Real-Time File Watcher: ACTIVE (try creating/renaming/editing a file!)")
     print("-" * 76)
     print("  Commands & Query Examples:")
     print("    • Standard search : inverted index compression")
@@ -117,7 +117,7 @@ def interactive_loop(target_dir: str) -> None:
             if query.lower() == ":status":
                 watcher.scan_for_delta_events()
                 print(
-                    f"  📊 Active Documents: {len(engine)} | "
+                    f"  Active Documents: {len(engine)} | "
                     f"Vocabulary Terms: {engine.native_index.vocabulary_size()}"
                 )
                 continue
@@ -126,7 +126,7 @@ def interactive_loop(target_dir: str) -> None:
                 t0 = time.perf_counter()
                 suggestions = engine.suggest_autocomplete(prefix, 15)
                 dt = (time.perf_counter() - t0) * 1000.0
-                print(f"  💡 Autocomplete ({dt:.3f} ms): {', '.join(suggestions)}")
+                print(f"  Autocomplete ({dt:.3f} ms): {', '.join(suggestions)}")
                 continue
 
             watcher.flush_ready_events(force=True)
@@ -163,7 +163,7 @@ def main() -> None:
         engine.load()
         dt = index_directory(target_dir, engine, cfg["SUPPORTED_FORMATS"])
         print(
-            f"✓ Synced {len(engine)} files ({engine.native_index.vocabulary_size()} terms) in {dt:.1f} ms"
+            f"Synced {len(engine)} files ({engine.native_index.vocabulary_size()} terms) in {dt:.1f} ms"
         )
         print_results(args.query, engine)
     else:

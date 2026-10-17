@@ -638,7 +638,7 @@ class MyWidget(QWidget):
 
         if not quiet:
             self._set_status(
-                f"✓ Ready ({len(new_index_data)} files indexed • Live watcher active)",
+                f"Ready ({len(new_index_data)} files indexed • Live watcher active)",
                 "success",
             )
         logger.info("Index and autocomplete data updated")
