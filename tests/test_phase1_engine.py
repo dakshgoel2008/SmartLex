@@ -7,7 +7,7 @@ from pathlib import Path
 from smartlex.core.catalog import CatalogDB
 from smartlex.core.config import load_config
 from smartlex.core.index_manager import generate_autocomplete, load_index, save_index
-from smartlex.core.keyword_extraction import extract_keywords, rake_keywords
+from smartlex.core.keyword_extraction import extract_keywords
 from smartlex.core.native_engine import SmartLexEngine, edit_distance, stem_word
 from smartlex.core.processor import process_all_batches
 from smartlex.core.search_engine import search, search_with_snippets
@@ -17,11 +17,8 @@ from smartlex.core.text_extraction import extract_text_from_file
 class TestPhase1SmartLexEngine(unittest.TestCase):
 
     def test_tokenizer_keeps_numbers_and_punctuated_words(self):
-        """
-        Verifies that the bug where 'invoice 2024' dropped '2024' and punctuated
-        phrases were discarded is completely fixed.
-        """
-        kws = rake_keywords("Invoice #2024: Payment of $1,500 is due on Jan 15, 2026!")
+        """Numbers like 2024 and words next to punctuation are kept."""
+        kws = extract_keywords("Invoice #2024: Payment of $1,500 is due on Jan 15, 2026!")
         self.assertIn("invoice", kws)
         self.assertIn("2024", kws)
         self.assertIn("1500", "".join(kws) if "1500" not in kws else kws)
