@@ -32,19 +32,26 @@
 
 ### Method 2: Terminal Package (For Developers)
 
-You can install this directly into your Python environment as a global package.
+Requires Python 3.10–3.14 on Windows (x64), macOS (Intel or Apple Silicon) or Linux (x64). Prebuilt wheels mean no compiler is needed.
 
-1. **Install via pip**
+1. **Install with [pipx](https://pipx.pypa.io)** (recommended: isolated, and the command works from anywhere)
 ```bash
-pip install smartlex-search
+pipx install smartlex-search
+```
+   or with plain pip: `pip install smartlex-search`
+
+2. **Run it**
+```bash
+smartlex            # desktop app
+smartlex-cli -d ~/Documents    # terminal mode
 ```
 
-2. **Run it from anywhere**
+3. **Update later**
 ```bash
-smartlex
+pipx upgrade smartlex-search
 ```
 
-*(Note: To install the developer version from source, simply clone the repo and run `pip install -e .`)*
+*(To work on the source, clone the repo and run `pip install -e .`)*
 
 ---
 
@@ -161,6 +168,20 @@ SmartLex/
 ```
 
 ---
+
+## Releasing
+
+Every push runs the tests on Windows, macOS and Linux (`.github/workflows/ci.yml`).
+To publish a new version to PyPI:
+
+1. Bump `version` in `pyproject.toml` (e.g. `2.1.1`) and commit it.
+2. Tag and push:
+```bash
+git tag v2.1.1
+git push origin main --tags
+```
+
+The release workflow checks the tag matches the version, runs all tests, builds and tests wheels for every supported platform, and publishes only if everything passes. It then creates a GitHub Release with the same files. To try a release without publishing, run the "Release" workflow manually from the Actions tab.
 
 ## Reference
 

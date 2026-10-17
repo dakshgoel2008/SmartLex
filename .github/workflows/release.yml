@@ -1,0 +1,157 @@
+name: Release
+
+# Pushing a tag like v2.1.0 builds, tests and publishes that version to PyPI.
+# Running it manually (Actions tab > Release > Run workflow) builds and tests without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    name: Check version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Tag must match pyproject.toml and be new on PyPI
+        env:
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          python - <<'EOF'
+          import json, os, sys, tomllib, urllib.error, urllib.request
+
+          version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          print(f"pyproject.toml version: {version}")
+
+          if os.environ["IS_TAG"] == "true":
+              tag = os.environ["GITHUB_REF_NAME"]
+              if tag != f"v{version}":
+                  sys.exit(f"Tag {tag} does not match pyproject.toml version {version} (expected v{version}).")
+
+          try:
+              with urllib.request.urlopen("https://pypi.org/pypi/smartlex-search/json", timeout=30) as response:
+                  released = json.load(response)["releases"]
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  sys.exit(f"Could not reach PyPI: {error}")
+              released = {}  # project not on PyPI yet
+          if version in released:
+              sys.exit(f"Version {version} is already on PyPI. Bump the version in pyproject.toml.")
+          print(f"Version {version} is new on PyPI.")
+          EOF
+
+  tests:
+    name: Tests
+    uses: ./.github/workflows/ci.yml
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Build sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist
+
+      # Users without a matching wheel compile from the sdist, so it must build and pass tests.
+      - name: Install sdist in a clean environment and test it
+        run: |
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/pip install dist/*.tar.gz
+          mkdir /tmp/sdist-test
+          cp -r tests /tmp/sdist-test/
+          cd /tmp/sdist-test
+          /tmp/sdist-venv/bin/python -m unittest tests.test_phase1_engine tests.test_phase2_watcher_and_scanner \
+            tests.test_phase3_multimodal tests.test_phase4_gui_helpers tests.test_phase5_image_ocr
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15 is Apple Silicon, macos-15-intel is Intel; each tests its wheels natively.
+        os: [ubuntu-24.04, windows-2025, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Build and test settings live in [tool.cibuildwheel] in pyproject.toml.
+      - uses: pypa/cibuildwheel@v4.3.1
+        with:
+          output-dir: wheelhouse
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [check-version, tests, sdist, wheels]
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/smartlex-search/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # 5 Python versions on Linux, Windows and Apple Silicon, 4 on Intel macOS, plus the sdist.
+      - name: Check that every expected file was built
+        run: |
+          ls -l dist
+          wheels=$(ls dist/*.whl | wc -l)
+          sdists=$(ls dist/*.tar.gz | wc -l)
+          echo "wheels=$wheels sdists=$sdists"
+          if [ "$wheels" -ne 19 ] || [ "$sdists" -ne 1 ]; then
+            echo "Expected 19 wheels and 1 sdist; refusing to publish a partial release."
+            exit 1
+          fi
+
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+
+  github-release:
+    name: GitHub Release
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - uses: softprops/action-gh-release@v3.0.3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

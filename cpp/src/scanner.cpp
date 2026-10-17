@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -55,11 +56,19 @@ std::string path_to_utf8(const fs::path& path) {
     return std::string(utf8.begin(), utf8.end());
 }
 
+// clock_cast is missing from some standard libraries (older macOS libc++), so convert via
+// the offset between the two clocks. Microseconds keep extreme file times from overflowing.
 uint64_t file_time_to_ns(fs::file_time_type ftime) {
-    auto sys_time = std::chrono::time_point_cast<std::chrono::nanoseconds>(
-        std::chrono::clock_cast<std::chrono::system_clock>(ftime));
-    auto count = sys_time.time_since_epoch().count();
-    return (count > 0) ? static_cast<uint64_t>(count) : 0;
+    using std::chrono::microseconds;
+    auto offset = std::chrono::duration_cast<microseconds>(ftime - fs::file_time_type::clock::now());
+    auto now = std::chrono::duration_cast<microseconds>(
+        std::chrono::system_clock::now().time_since_epoch());
+    long long us = (now + offset).count();
+    if (us <= 0) {
+        return 0;
+    }
+    constexpr long long kMaxMicroseconds = std::numeric_limits<long long>::max() / 1000;
+    return static_cast<uint64_t>(std::min(us, kMaxMicroseconds)) * 1000;
 }
 
 fs::path utf8_to_path(const std::string& utf8) {

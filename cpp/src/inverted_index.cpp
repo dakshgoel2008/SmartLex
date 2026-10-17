@@ -3,8 +3,10 @@
 #include "smartlex/varint.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <unordered_set>
@@ -34,6 +36,11 @@ void split_path_info(const std::string& path, std::string& out_filename, std::st
     } else {
         out_ext.clear();
     }
+}
+
+// Paths arrive as UTF-8; a plain std::string path would use the ANSI code page on Windows.
+std::filesystem::path utf8_to_path(const std::string& utf8) {
+    return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
 }
 
 std::string to_lower_copy(const std::string& s) {
@@ -704,14 +711,14 @@ std::vector<SearchResult> InvertedIndex::search(const std::string& raw_query,
     }
 
     // Sort descending by score, breaking ties by number of matched terms and path
-    std::sort(results.begin(), results.end(), [](const SearchResult& a, const SearchResult& b) {
-        if (std::abs(a.score - b.score) > 1e-9) {
-            return a.score > b.score;
+    std::sort(results.begin(), results.end(), [](const SearchResult& left, const SearchResult& right) {
+        if (std::abs(left.score - right.score) > 1e-9) {
+            return left.score > right.score;
         }
-        if (a.matched_terms != b.matched_terms) {
-            return a.matched_terms > b.matched_terms;
+        if (left.matched_terms != right.matched_terms) {
+            return left.matched_terms > right.matched_terms;
         }
-        return a.path < b.path;
+        return left.path < right.path;
     });
 
     if (results.size() > max_results) {
@@ -833,7 +840,7 @@ std::vector<std::string> InvertedIndex::get_all_paths() const {
 
 bool InvertedIndex::save_binary(const std::string& file_path) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
+    std::ofstream out(utf8_to_path(file_path), std::ios::binary | std::ios::trunc);
     if (!out) {
         return false;
     }
@@ -887,7 +894,7 @@ bool InvertedIndex::save_binary(const std::string& file_path) const {
 }
 
 bool InvertedIndex::load_binary(const std::string& file_path) {
-    std::ifstream in(file_path, std::ios::binary);
+    std::ifstream in(utf8_to_path(file_path), std::ios::binary);
     if (!in) {
         return false;
     }

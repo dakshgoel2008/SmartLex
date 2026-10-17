@@ -243,7 +243,7 @@ class TestUnusualFilesNeverCrash(ImageTestCase):
         self.assertEqual([r["path"] for r in self.engine.search("searchable")], [str(good)])
         self.assertEqual([r["path"] for r in self.engine.search("exploding")], [str(bad)])
 
-    @unittest.skipIf(sys.platform == "win32", "POSIX file names can hold arbitrary bytes")
+    @unittest.skipUnless(sys.platform.startswith("linux"), "only Linux allows non-UTF-8 file names")
     def test_scanner_skips_names_that_are_not_utf8(self):
         os.makedirs(self.root / "pics", exist_ok=True)
         with open(os.path.join(str(self.root / "pics").encode(), b"bad\xff\xfe.png"), "wb") as f:

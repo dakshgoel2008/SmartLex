@@ -4,17 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartlex-search"
-version = "2.0.0"
+version = "2.1.0"
 authors = [
-  { name="Daksh Goel", email="daksh@example.com" },
+  { name = "Daksh Goel" },
 ]
 description = "A hybrid C++20 + Python desktop search engine with BM25F ranking and multimodal extraction"
 readme = "readme.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: C++",
-    "Operating System :: OS Independent",
+    "License :: Other/Proprietary License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: X11 Applications :: Qt",
+    "Topic :: Desktop Environment :: File Managers",
 ]
 dependencies = [
     "PyQt5>=5.15.9",
@@ -25,9 +35,31 @@ dependencies = [
     "onnxruntime>=1.17.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/dakshgoel2008/SmartLex"
+Issues = "https://github.com/dakshgoel2008/SmartLex/issues"
+
 [project.scripts]
 smartlex = "smartlex.main:main"
 smartlex-cli = "smartlex.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.cibuildwheel]
+# Only platforms where every dependency (PyQt5, onnxruntime, opencv) has wheels.
+build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_* *-win32 *-manylinux_i686 cp314-macosx_x86_64"
+# Qt-free tests; the GUI tests run in ci.yml on real runners.
+test-command = "python -m unittest tests.test_phase1_engine tests.test_phase2_watcher_and_scanner tests.test_phase3_multimodal tests.test_phase4_gui_helpers tests.test_phase5_image_ocr"
+test-sources = ["tests"]
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+
+[tool.cibuildwheel.macos]
+# std::filesystem needs macOS 10.15+.
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
