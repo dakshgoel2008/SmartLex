@@ -288,8 +288,7 @@ class TestOcrPreparation(ImageTestCase):
 
     def test_tall_screenshot_is_tiled_with_overlap_and_bounded(self):
         path = self.root / "tall.png"
-        Image.new("RGB", (800, 6000), "white").save(path)
-        img = Image.open(path)
+        img = Image.new("RGB", (800, 6000), "white")
         ImageDraw.Draw(img).rectangle((10, 10, 100, 100), fill="black")
         img.save(path)
 
