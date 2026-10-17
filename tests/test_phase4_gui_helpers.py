@@ -125,6 +125,10 @@ class TestPhase4GuiHelpers(unittest.TestCase):
         self.assertEqual(build_reveal_command(path, "darwin"), ["open", "-R", path])
         windows_command = build_reveal_command(path, "win32")
         self.assertEqual(windows_command[:2], ["explorer", "/select,"])
+        self.assertEqual(
+            build_reveal_command("C:/Users/me/My Docs/report.pdf", "win32"),
+            ["explorer", "/select,", "C:\\Users\\me\\My Docs\\report.pdf"],
+        )
 
 
 if __name__ == "__main__":
