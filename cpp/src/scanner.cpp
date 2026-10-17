@@ -48,6 +48,13 @@ int compute_priority_tier(const std::string& path_lower) {
     return 1;
 }
 
+// path::string() throws on Windows for names that do not fit the ANSI code page,
+// so always convert through UTF-8.
+std::string path_to_utf8(const fs::path& path) {
+    std::u8string utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
+}
+
 uint64_t file_time_to_ns(fs::file_time_type ftime) {
     auto sys_time = std::chrono::time_point_cast<std::chrono::nanoseconds>(
         std::chrono::clock_cast<std::chrono::system_clock>(ftime));
@@ -55,7 +62,77 @@ uint64_t file_time_to_ns(fs::file_time_type ftime) {
     return (count > 0) ? static_cast<uint64_t>(count) : 0;
 }
 
+fs::path utf8_to_path(const std::string& utf8) {
+    return fs::path(std::u8string(utf8.begin(), utf8.end()));
+}
+
+bool is_internal_runtime_file(const std::string& name_lower) {
+    if (name_lower == "autocomplete_words.json" ||
+        name_lower == "output.json" ||
+        name_lower == "search_engine.log" ||
+        name_lower == "cli_batch.txt") {
+        return true;
+    }
+    return name_lower.rfind("pdf_part_", 0) == 0 &&
+           name_lower.size() > 4 &&
+           name_lower.substr(name_lower.size() - 4) == ".txt";
+}
+
 }  // namespace
+
+// Lists one directory: matching files go to `files`, subdirectories worth
+// descending into go to `subdirs`.
+void FileScanner::list_directory(const std::string& dir,
+                                 const std::vector<std::string>& norm_extensions,
+                                 std::vector<std::string>& subdirs,
+                                 std::vector<ScannedFile>& files) {
+    std::error_code ec;
+    fs::directory_iterator it(utf8_to_path(dir), fs::directory_options::skip_permission_denied, ec);
+    if (ec) {
+        return;
+    }
+
+    for (const fs::directory_entry& entry : it) {
+        std::error_code entry_ec;
+        if (entry.is_symlink(entry_ec)) {
+            continue;  // Never follow symlinks to avoid infinite loops
+        }
+
+        std::string name = path_to_utf8(entry.path().filename());
+        if (entry.is_directory(entry_ec)) {
+            if (!is_excluded_directory(name)) {
+                subdirs.push_back(path_to_utf8(entry.path()));
+            }
+            continue;
+        }
+
+        if (!entry.is_regular_file(entry_ec)) {
+            continue;
+        }
+        if (name.empty() || name[0] == '.' || name.rfind("~$", 0) == 0) {
+            continue;
+        }
+        std::string name_lower = to_lower_ascii_str(name);
+        if (is_internal_runtime_file(name_lower) ||
+            !has_supported_extension(name_lower, norm_extensions)) {
+            continue;
+        }
+
+        std::string full_path = path_to_utf8(entry.path());
+        uint64_t file_size = entry.file_size(entry_ec);
+        if (entry_ec) {
+            file_size = 0;
+        }
+        uint64_t mtime_ns = 0;
+        auto ftime = entry.last_write_time(entry_ec);
+        if (!entry_ec) {
+            mtime_ns = file_time_to_ns(ftime);
+        }
+
+        int tier = compute_priority_tier(to_lower_ascii_str(full_path));
+        files.push_back(ScannedFile{std::move(full_path), mtime_ns, file_size, tier});
+    }
+}
 
 bool FileScanner::is_excluded_directory(const std::string& dir_name) {
     if (dir_name.empty()) {
@@ -119,7 +196,7 @@ std::vector<ScannedFile> FileScanner::scan_directories(
     std::queue<std::string> dir_queue;
     for (const std::string& root : root_paths) {
         std::error_code ec;
-        if (fs::exists(root, ec) && fs::is_directory(root, ec)) {
+        if (fs::is_directory(utf8_to_path(root), ec)) {
             dir_queue.push(root);
         }
     }
@@ -158,60 +235,13 @@ std::vector<ScannedFile> FileScanner::scan_directories(
             std::vector<std::string> discovered_subdirs;
             std::vector<ScannedFile> discovered_files;
 
-            std::error_code ec;
-            fs::directory_iterator it(
-                current_dir,
-                fs::directory_options::skip_permission_denied,
-                ec
-            );
-
-            if (!ec) {
-                for (const fs::directory_entry& entry : it) {
-                    std::error_code entry_ec;
-                    if (entry.is_symlink(entry_ec)) {
-                        continue;  // Never follow symlinks to avoid infinite loops
-                    }
-
-                    std::string name = entry.path().filename().string();
-                    if (entry.is_directory(entry_ec)) {
-                        if (!is_excluded_directory(name)) {
-                            discovered_subdirs.push_back(entry.path().string());
-                        }
-                    } else if (entry.is_regular_file(entry_ec)) {
-                        if (name.empty() || name[0] == '.' || name.rfind("~$", 0) == 0) {
-                            continue;
-                        }
-                        std::string name_lower = to_lower_ascii_str(name);
-                        if (name_lower == "autocomplete_words.json" ||
-                            name_lower == "output.json" ||
-                            name_lower == "search_engine.log" ||
-                            name_lower == "cli_batch.txt" ||
-                            (name_lower.rfind("pdf_part_", 0) == 0 &&
-                             name_lower.size() > 4 &&
-                             name_lower.substr(name_lower.size() - 4) == ".txt")) {
-                            continue;
-                        }
-                        if (has_supported_extension(name_lower, norm_extensions)) {
-                            std::string full_path = entry.path().string();
-                            uint64_t fsize = entry.file_size(entry_ec);
-                            if (entry_ec) fsize = 0;
-
-                            uint64_t mtime_ns = 0;
-                            auto ftime = entry.last_write_time(entry_ec);
-                            if (!entry_ec) {
-                                mtime_ns = file_time_to_ns(ftime);
-                            }
-
-                            int tier = compute_priority_tier(to_lower_ascii_str(full_path));
-                            discovered_files.push_back(ScannedFile{
-                                std::move(full_path),
-                                mtime_ns,
-                                fsize,
-                                tier
-                            });
-                        }
-                    }
-                }
+            // Iterating a directory can throw (e.g. it is deleted mid-scan). An exception
+            // escaping a worker thread would terminate the process, so skip that directory.
+            try {
+                list_directory(current_dir, norm_extensions, discovered_subdirs, discovered_files);
+            } catch (const std::exception&) {
+                discovered_subdirs.clear();
+                discovered_files.clear();
             }
 
             {

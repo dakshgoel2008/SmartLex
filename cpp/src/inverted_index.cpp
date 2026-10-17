@@ -14,7 +14,9 @@ namespace smartlex {
 namespace {
 
 constexpr char kMagicHeader[4] = {'S', 'L', 'E', 'X'};
-constexpr uint32_t kFormatVersion = 1;
+// Version 2: tokenizer splits words on Unicode punctuation. Older index files are
+// rejected on load and rebuilt from the catalog's stored text.
+constexpr uint32_t kFormatVersion = 2;
 
 // Extract basename and lowercase extension from a file path
 void split_path_info(const std::string& path, std::string& out_filename, std::string& out_ext) {

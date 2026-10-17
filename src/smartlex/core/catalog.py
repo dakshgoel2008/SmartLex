@@ -4,33 +4,29 @@ import re
 import sqlite3
 import time
 import zlib
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 
 class CatalogDB:
-    """
-    SQLite-backed Document Catalog & Compressed Snippet Store (WAL Mode).
-
-    Responsibilities:
-    1. Tracks (path, mtime_ns, file_size, content_hash) so SmartLex NEVER
-       re-indexes files that haven't changed.
-    2. Detects moved/renamed files by matching (file_size, content_hash) against
-       deleted paths so moved PDFs/docs are updated in <1ms without re-extraction.
-    3. Stores zlib-compressed extracted text so SmartLex can generate
-       Google-style context snippets ("...total due for invoice 2024 is...")
-       in < 0.2ms without re-opening the PDF or DOCX file during search.
-    """
+    """SQLite catalog of indexed files: change tracking, move detection and compressed text for snippets."""
 
     def __init__(self, db_path: str = "smartlex_catalog.db"):
         self.db_path = str(db_path)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Opens a connection that commits on success, rolls back on error and is always closed."""
         conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -43,11 +39,20 @@ class CatalogDB:
                     file_size INTEGER NOT NULL,
                     content_hash TEXT NOT NULL,
                     compressed_text BLOB,
-                    updated_at REAL NOT NULL
+                    updated_at REAL NOT NULL,
+                    ocr_engine TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
-            conn.commit()
+            # Catalogs created before OCR tracking existed lack this column.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
+            if "ocr_engine" not in columns:
+                conn.execute(
+                    "ALTER TABLE documents ADD COLUMN ocr_engine TEXT NOT NULL DEFAULT ''"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at)"
+            )
 
     @staticmethod
     def stat_file(path: str) -> Optional[Tuple[int, int]]:
@@ -81,12 +86,7 @@ class CatalogDB:
     def plan_incremental_sync(
         self, current_paths: Iterable[str]
     ) -> Tuple[List[str], List[str], List[str]]:
-        """
-        Compares current files on disk against the catalog.
-
-        Returns:
-            (files_to_index, unchanged_files, deleted_files)
-        """
+        """Returns (files_to_index, unchanged_files, deleted_files) for the given paths."""
         existing_meta = self.get_all_metadata()
         seen_paths = set()
 
@@ -113,15 +113,8 @@ class CatalogDB:
     def detect_moves_and_plan_sync(
         self, current_paths: Iterable[str]
     ) -> Tuple[List[str], List[str], List[str], List[Tuple[str, str, int, int]]]:
-        """
-        Enhanced incremental sync planner that also detects moved/renamed files!
-
-        When a file is moved or renamed, it appears as a 'deleted' old path and a
-        'new' path with the exact same `file_size` and `content_hash`.
-
-        Returns:
-            (files_to_index, unchanged_files, deleted_files, moved_files)
-            where `moved_files` is a list of `(old_path, new_path, new_mtime_ns, file_size)`.
+        """Like plan_incremental_sync, plus moved files matched by size and content hash.
+        Returns (files_to_index, unchanged, deleted, moved) with moved as (old, new, mtime_ns, size).
         """
         existing_meta = self.get_all_metadata()
         seen_paths = set()
@@ -179,45 +172,42 @@ class CatalogDB:
         self, old_path: str, new_path: str, new_mtime_ns: int = 0
     ) -> Optional[str]:
         """
-        Updates the path of a moved/renamed file in SQLite without re-extracting it,
-        and returns its stored plain text.
+        Moves a catalog row to `new_path` without re-extracting the file and returns
+        its stored text, or None if `old_path` is not cataloged.
         """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT mtime_ns, file_size, content_hash, compressed_text FROM documents WHERE path = ?",
+                "SELECT mtime_ns, compressed_text FROM documents WHERE path = ?",
                 (old_path,),
             ).fetchone()
             if not row:
                 return None
 
-            old_mtime, file_size, content_hash, blob = row
+            old_mtime, blob = row
             final_mtime = new_mtime_ns if new_mtime_ns > 0 else old_mtime
-            now = time.time()
-
-            conn.execute("DELETE FROM documents WHERE path = ?", (old_path,))
+            if new_path != old_path:
+                conn.execute("DELETE FROM documents WHERE path = ?", (new_path,))
             conn.execute(
-                """
-                INSERT OR REPLACE INTO documents
-                    (path, mtime_ns, file_size, content_hash, compressed_text, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (new_path, final_mtime, file_size, content_hash, blob, now),
+                "UPDATE documents SET path = ?, mtime_ns = ?, updated_at = ? WHERE path = ?",
+                (new_path, final_mtime, time.time(), old_path),
             )
-            conn.commit()
 
-            if blob:
-                try:
-                    return zlib.decompress(blob).decode("utf-8", errors="ignore")
-                except Exception:
-                    return ""
+        return self._decompress(blob)
+
+    @staticmethod
+    def _decompress(blob) -> str:
+        if not blob:
+            return ""
+        try:
+            return zlib.decompress(blob).decode("utf-8", errors="ignore")
+        except Exception:
             return ""
 
     def upsert_documents_batch(
-        self, records: List[Tuple[str, int, int, str, str]]
+        self, records: List[Tuple[str, int, int, str, str]], ocr_engine: str = ""
     ) -> None:
-        """
-        Saves a batch of indexed documents into the SQLite catalog.
-        Each tuple in `records` is: (path, mtime_ns, file_size, content_hash, raw_text).
+        """Saves (path, mtime_ns, file_size, content_hash, raw_text) records.
+        `ocr_engine` names the OCR backend that read them ("" = not OCR'd yet).
         """
         if not records:
             return
@@ -230,23 +220,24 @@ class CatalogDB:
                 if raw_text
                 else b""
             )
-            rows.append((path, mtime_ns, file_size, content_hash, compressed, now))
+            rows.append((path, mtime_ns, file_size, content_hash, compressed, now, ocr_engine))
 
         with self._connect() as conn:
             conn.executemany(
                 """
-                INSERT INTO documents (path, mtime_ns, file_size, content_hash, compressed_text, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO documents
+                    (path, mtime_ns, file_size, content_hash, compressed_text, updated_at, ocr_engine)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     mtime_ns = excluded.mtime_ns,
                     file_size = excluded.file_size,
                     content_hash = excluded.content_hash,
                     compressed_text = excluded.compressed_text,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    ocr_engine = excluded.ocr_engine
                 """,
                 rows,
             )
-            conn.commit()
 
     def remove_documents(self, paths: List[str]) -> None:
         """Removes deleted file paths from the catalog."""
@@ -256,7 +247,6 @@ class CatalogDB:
             conn.executemany(
                 "DELETE FROM documents WHERE path = ?", [(p,) for p in paths]
             )
-            conn.commit()
 
     def get_document_text(self, path: str) -> str:
         """Decompresses and returns the stored plain text for a document."""
@@ -264,12 +254,7 @@ class CatalogDB:
             row = conn.execute(
                 "SELECT compressed_text FROM documents WHERE path = ?", (path,)
             ).fetchone()
-            if not row or not row[0]:
-                return ""
-            try:
-                return zlib.decompress(row[0]).decode("utf-8", errors="ignore")
-            except Exception:
-                return ""
+        return self._decompress(row[0]) if row else ""
 
     def iter_all_documents(self) -> Iterable[Tuple[str, int, int, str]]:
         """Yields (path, mtime_ns, file_size, plain_text) for all stored documents."""
@@ -278,13 +263,25 @@ class CatalogDB:
                 "SELECT path, mtime_ns, file_size, compressed_text FROM documents"
             )
             for path, mtime_ns, file_size, blob in cursor:
-                text = ""
-                if blob:
-                    try:
-                        text = zlib.decompress(blob).decode("utf-8", errors="ignore")
-                    except Exception:
-                        text = ""
-                yield path, mtime_ns, file_size, text
+                yield path, mtime_ns, file_size, self._decompress(blob)
+
+    def iter_documents_updated_after(
+        self, timestamp: float
+    ) -> Iterable[Tuple[str, int, int, str]]:
+        """Like `iter_all_documents`, limited to rows written after `timestamp`."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "SELECT path, mtime_ns, file_size, compressed_text FROM documents "
+                "WHERE updated_at > ?",
+                (timestamp,),
+            )
+            for path, mtime_ns, file_size, blob in cursor.fetchall():
+                yield path, mtime_ns, file_size, self._decompress(blob)
+
+    def get_ocr_engines(self) -> Dict[str, str]:
+        """Returns {path: ocr_engine} for every cataloged file."""
+        with self._connect() as conn:
+            return dict(conn.execute("SELECT path, ocr_engine FROM documents").fetchall())
 
     def generate_snippet(
         self, path: str, matched_words: List[str], max_length: int = 160
@@ -344,9 +341,7 @@ class CatalogDB:
         suffix = "..." if end < len(clean_text) else ""
         formatted = f"{prefix}{snippet}{suffix}"
 
-        # If the text before `start` had a timestamp `[MM:SS]` or page/slide/sheet marker
-        # (`[Page N]`, `[Slide N]`, `[Sheet: X]`, `[Chapter N]`), prepend the nearest marker
-        # if the snippet doesn't already contain one.
+        # Prefix the nearest preceding location marker ([02:30], [Page 3], [Sheet: X], ...)
         marker_pattern = re.compile(
             r"\[(?:\d{1,2}:\d{2}(?::\d{2})?|Page\s+\d+|Slide\s+\d+|Sheet:\s*[^\]]+|Chapter\s+\d+|OCR)\]"
         )

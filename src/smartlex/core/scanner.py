@@ -68,11 +68,7 @@ def get_available_drives() -> List[str]:
 
 
 def scan_dir_parallel(root_path: str, extensions: List[str], progress_callback=None) -> List[str]:
-    """
-    Scans `root_path` using the C++20 multi-threaded `FileScanner`.
-    Returns file paths sorted by priority (Desktop/Documents/Downloads first,
-    then newest modification time first).
-    """
+    """Scans `root_path` in C++, returning paths with user folders and newest files first."""
     if progress_callback:
         progress_callback(f"Scanning {root_path} with C++20 parallel scanner...")
 

@@ -1,23 +1,20 @@
-"""
-Multimodal Text & Metadata Extraction Pipeline for SmartLex (Phase 3).
-
-Provides zero-dependency (standard library + Pillow) and pluggable AI/CLI
-extractors for:
-  1. Office & E-Book Archives:  Excel (.xlsx), PowerPoint (.pptx), EPUB (.epub), ODF (.odt, .ods, .odp)
-  2. Images & Screenshots:      EXIF/PNG metadata + OCR (Tesseract / RapidOCR / custom hook)
-  3. Audio Recordings:          Native ID3v1/ID3v2/RIFF-INFO/Vorbis/MP4 tags + .srt/.vtt/.lrc transcripts + Whisper ASR
-  4. Video Files:               MP4/MKV metadata + Sidecar/Embedded subtitles ([MM:SS] timestamps) + ASR
-"""
+"""Text and metadata extractors for office files, e-books, images, audio and video."""
 
 import html
+import importlib.metadata
+import importlib.util
+import math
 import os
 import re
 import shutil
 import struct
 import subprocess
+import tempfile
+import threading
 import wave
 import xml.etree.ElementTree as ET
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -27,10 +24,12 @@ logger = setup_logger(__name__)
 
 # Optional Pillow import for image metadata & OCR preprocessing
 try:
-    from PIL import ExifTags, Image
+    from PIL import ExifTags, Image, ImageOps, ImageStat
 except ImportError:
     Image = None
     ExifTags = None
+    ImageOps = None
+    ImageStat = None
 
 # Pluggable callbacks for OCR (image_path -> str) and ASR (media_path -> str)
 # Allows unit tests, custom local models, or enterprise plugins to hook in cleanly.
@@ -61,17 +60,8 @@ def format_timestamp(seconds: float) -> str:
     return f"[{minutes:02d}:{secs:02d}]"
 
 
-# ==============================================================================
-# 1. OFFICE & E-BOOK EXTRACTORS (.xlsx, .pptx, .epub, .odt/.ods/.odp)
-# ==============================================================================
-
-
 def extract_text_xlsx(file_path: str) -> str:
-    """
-    Extracts 100% of text and numbers from an Excel (.xlsx) workbook using pure
-    Python `zipfile` + `xml.etree.ElementTree`.
-    Preserves sheet names as `[Sheet: <Name>]` headers for rich search snippets.
-    """
+    """Extracts cell text from an .xlsx workbook, prefixing each sheet with `[Sheet: Name]`."""
     output_sections: List[str] = []
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
@@ -167,7 +157,7 @@ def extract_text_xlsx(file_path: str) -> str:
 
 def extract_text_pptx(file_path: str) -> str:
     """
-    Extracts 100% of slide text and speaker notes from a PowerPoint (.pptx) file.
+    Extracts slide text and speaker notes from a PowerPoint (.pptx) file.
     Prefixes each slide with `[Slide N]` so search snippets show the exact slide.
     """
     slide_sections: List[str] = []
@@ -320,9 +310,20 @@ def extract_text_odf(file_path: str) -> str:
     return " ".join(parts)
 
 
-# ==============================================================================
-# 2. IMAGE & OCR EXTRACTOR (.png, .jpg, .jpeg, .webp, .bmp, .tiff, .gif)
-# ==============================================================================
+# Image metadata is instant to read; OCR takes seconds per image, so the indexer
+# runs it as a separate background pass (see processor.run_ocr_pass).
+MIN_OCR_SIDE = 8                # images smaller than this cannot hold readable text
+MAX_OCR_PIXELS = 80_000_000     # larger images are skipped to bound memory and time
+MIN_OCR_CONTRAST = 12           # a near-uniform image (blank page, solid colour) has no text
+MAX_OCR_PAGES = 10              # pages read from a multi-page TIFF
+OCR_MAX_SIDE = 2000             # the OCR engine shrinks images whose long side exceeds this
+TILE_ASPECT_RATIO = 2.5         # long, narrow images above OCR_MAX_SIDE are read in tiles
+MAX_OCR_TILES = 12
+SIDECAR_MAX_BYTES = 1_000_000
+
+_rapidocr_engine = None
+_rapidocr_failed = False
+_rapidocr_lock = threading.Lock()
 
 
 def _decode_exif_value(val) -> str:
@@ -331,175 +332,391 @@ def _decode_exif_value(val) -> str:
         if val.startswith(b"ASCII\x00\x00\x00"):
             val = val[8:]
         elif val.startswith(b"UNICODE\x00"):
-            return val[8:].decode("utf-16-le", errors="ignore").rstrip("\x00").strip()
+            return val[8:].decode("utf-16-le", errors="ignore").replace("\x00", "").strip()
         # Check if it looks like UTF-16LE (alternating null bytes)
         if len(val) >= 4 and val[1] == 0 and val[3] == 0:
-            return val.decode("utf-16-le", errors="ignore").rstrip("\x00").strip()
-        return val.decode("utf-8", errors="ignore").rstrip("\x00").strip()
+            return val.decode("utf-16-le", errors="ignore").replace("\x00", "").strip()
+        return val.decode("utf-8", errors="ignore").replace("\x00", "").strip()
     if isinstance(val, (tuple, list)):
         # Windows XP tags sometimes come from Pillow as tuple of byte ints
         if val and all(isinstance(x, int) and 0 <= x <= 255 for x in val):
-            return bytes(val).decode("utf-16-le", errors="ignore").rstrip("\x00").strip()
+            return bytes(val).decode("utf-16-le", errors="ignore").replace("\x00", "").strip()
         return " ".join(str(x) for x in val)
-    return str(val).strip()
+    return str(val).replace("\x00", "").strip()
 
 
-def run_image_ocr(file_path: str) -> str:
-    """
-    Runs Optical Character Recognition (OCR) on an image file using the best
-    available backend:
-      1. Custom registered OCR backend (`register_ocr_backend`)
-      2. `rapidocr_onnxruntime` (if installed)
-      3. `pytesseract` (if installed)
-      4. System `tesseract` CLI binary (if installed on PATH)
-    """
-    if _custom_ocr_backend is not None:
-        try:
-            res = _custom_ocr_backend(file_path)
-            if res and res.strip():
-                return res.strip()
-        except Exception as e:
-            logger.error(f"Custom OCR backend failed on {file_path}: {e}")
+# Only the values are indexed, never the field names: indexing "Software:" or
+# "Title:" would make every image match a search for "software" or "title".
+_IMAGE_INFO_KEYS = {
+    "title", "description", "comment", "comments", "author", "keywords", "subject",
+    "software", "copyright", "source", "parameters", "prompt", "ocr_text",
+}
 
-    # Option 2: RapidOCR (ONNX Runtime)
+_EXIF_TEXT_TAGS = {
+    "ImageDescription", "Make", "Model", "Software", "Artist", "Copyright",
+    "UserComment", "XPTitle", "XPComment", "XPAuthor", "XPKeywords", "XPSubject",
+    "DocumentName",
+}
+
+_EXIF_DATE_TAGS = {"DateTime", "DateTimeOriginal"}
+
+
+def _embedded_text_values(img) -> List[str]:
+    """Text chunks stored in PNG, WebP and GIF files (img.info)."""
+    values = []
+    for key, value in (img.info or {}).items():
+        if not isinstance(key, str):
+            continue
+        key_lower = key.lower()
+        if key_lower in _IMAGE_INFO_KEYS or key_lower.startswith("text"):
+            decoded = _decode_exif_value(value)
+            if decoded and len(decoded) < 10000:
+                values.append(decoded)
+    return values
+
+
+def _exif_values(img) -> List[str]:
+    """Camera, author and description fields from EXIF, plus the capture date."""
+    if ExifTags is None or not hasattr(img, "getexif"):
+        return []
+    exif = img.getexif()
+    if not exif:
+        return []
+
+    tags = dict(exif.items())
+    # DateTimeOriginal and UserComment live in the Exif sub-IFD, not in IFD0.
     try:
-        from rapidocr_onnxruntime import RapidOCR  # type: ignore
-
-        ocr_engine = RapidOCR()
-        result, _ = ocr_engine(file_path)
-        if result:
-            return " ".join(line[1] for line in result if len(line) > 1 and line[1])
-    except ImportError:
+        tags.update(exif.get_ifd(ExifTags.IFD.Exif))
+    except Exception:
         pass
-    except Exception as e:
-        logger.debug(f"RapidOCR error on {file_path}: {e}")
 
-    # Option 3: pytesseract
+    values = []
+    date_value = ""
+    for tag_id, raw_value in tags.items():
+        tag_name = ExifTags.TAGS.get(tag_id, "")
+        if tag_name in _EXIF_TEXT_TAGS:
+            decoded = _decode_exif_value(raw_value)
+            if decoded:
+                values.append(decoded)
+        elif tag_name in _EXIF_DATE_TAGS and not date_value:
+            # "2024:05:01 10:30:00" -> "2024-05-01". The time of day is left out
+            # because tokens like "10" or "30" would match unrelated numeric queries.
+            match = re.match(r"(\d{4}):(\d{2}):(\d{2})", _decode_exif_value(raw_value))
+            if match:
+                date_value = "-".join(match.groups())
+    if date_value:
+        values.append(date_value)
+    return values
+
+
+def _xmp_values(img) -> List[str]:
+    """Title, description and keywords from an XMP packet (Lightroom, Photoshop, phones)."""
+    packet = img.info.get("xmp") or img.info.get("XML:com.adobe.xmp")
+    if not packet:
+        return []
+    if isinstance(packet, bytes):
+        packet = packet.decode("utf-8", errors="ignore")
+    packet = packet.strip("\x00 \n\r\t")
     try:
-        import pytesseract  # type: ignore
+        root = ET.fromstring(packet)
+    except ET.ParseError:
+        return []
 
-        if Image is not None:
-            with Image.open(file_path) as img:
-                txt = pytesseract.image_to_string(img)
-                if txt and txt.strip():
-                    return txt.strip()
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.debug(f"pytesseract error on {file_path}: {e}")
+    values = []
+    for elem in root.iter():
+        if not elem.tag.startswith("{http://purl.org/dc/elements/1.1/}"):
+            continue
+        if elem.tag.split("}")[-1] not in ("title", "description", "subject"):
+            continue
+        for child in elem.iter():
+            if child.text and child.text.strip():
+                values.append(child.text.strip())
+    return values
 
-    # Option 4: System `tesseract` CLI
-    tesseract_bin = shutil.which("tesseract")
-    if tesseract_bin:
+
+def _read_sidecar_caption(file_path: str) -> str:
+    """Reads `photo.caption` or `photo.txt` stored next to `photo.jpg`, if present."""
+    base = Path(file_path)
+    for ext in (".caption", ".txt"):
+        sidecar = base.with_suffix(ext)
+        if sidecar == base or not sidecar.is_file():
+            continue
         try:
-            proc = subprocess.run(
-                [tesseract_bin, str(file_path), "stdout", "-l", "eng", "--oem", "1"],
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=False,
-            )
-            if proc.returncode == 0 and proc.stdout.strip():
-                return proc.stdout.strip()
-        except Exception as e:
-            logger.debug(f"tesseract CLI error on {file_path}: {e}")
-
+            with open(sidecar, "rb") as f:
+                text = f.read(SIDECAR_MAX_BYTES).decode("utf-8", errors="ignore").strip()
+            if text:
+                return text
+        except OSError:
+            pass
     return ""
 
 
-def extract_text_image(file_path: str) -> str:
-    """
-    Two-stage Image Extractor:
-      - Stage A: Instant resolution, format, PNG/WebP text chunks, EXIF camera/comment tags,
-                 and sidecar `.txt`/`.caption` files.
-      - Stage B: Optical Character Recognition (OCR) for text inside screenshots & scans.
-    """
+def read_image_metadata(file_path: str) -> str:
+    """Returns the searchable metadata of an image. Never raises."""
     parts: List[str] = []
-
-    # Stage A: Image header, PNG text chunks, and EXIF metadata via Pillow
     if Image is not None:
         try:
             with Image.open(file_path) as img:
                 width, height = img.size
                 fmt = (img.format or Path(file_path).suffix.lstrip(".")).upper()
-                parts.append(f"[Image {fmt} {width}x{height} {img.mode}]")
-
-                # Extract PNG / WebP / GIF embedded text dictionary (`img.info`)
-                searchable_info_keys = {
-                    "title",
-                    "description",
-                    "comment",
-                    "comments",
-                    "author",
-                    "keywords",
-                    "subject",
-                    "software",
-                    "copyright",
-                    "source",
-                    "parameters",
-                    "prompt",
-                    "ocr_text",
-                }
-                for k, v in (img.info or {}).items():
-                    if isinstance(k, str) and (
-                        k.lower() in searchable_info_keys or k.lower().startswith("text")
-                    ):
-                        decoded = _decode_exif_value(v)
-                        if decoded and len(decoded) < 10000:
-                            parts.append(f"{k}: {decoded}")
-
-                # Extract EXIF metadata tags (Camera model, DateTime, ImageDescription, UserComment, XP*)
-                exif_data = img.getexif() if hasattr(img, "getexif") else None
-                if exif_data and ExifTags is not None:
-                    interesting_exif = {
-                        "ImageDescription",
-                        "Make",
-                        "Model",
-                        "Software",
-                        "DateTime",
-                        "DateTimeOriginal",
-                        "Artist",
-                        "Copyright",
-                        "UserComment",
-                        "XPTitle",
-                        "XPComment",
-                        "XPAuthor",
-                        "XPKeywords",
-                        "XPSubject",
-                        "DocumentName",
-                    }
-                    for tag_id, raw_val in exif_data.items():
-                        tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
-                        if tag_name in interesting_exif:
-                            decoded_val = _decode_exif_value(raw_val)
-                            if decoded_val:
-                                parts.append(f"{tag_name}: {decoded_val}")
+                parts.append(f"[Image {fmt} {width}x{height}]")
+                parts.extend(_embedded_text_values(img))
+                parts.extend(_exif_values(img))
+                parts.extend(_xmp_values(img))
         except Exception as e:
             logger.debug(f"Could not read image metadata for {file_path}: {e}")
 
-    # Check for sidecar caption file (e.g., `photo.txt` or `photo.caption`)
-    base = Path(file_path)
-    for ext in (".caption", ".txt"):
-        sidecar = base.with_suffix(ext)
-        if sidecar != base and sidecar.is_file():
-            try:
-                sc_text = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
-                if sc_text:
-                    parts.append(sc_text)
-            except OSError:
-                pass
+    caption = _read_sidecar_caption(file_path)
+    if caption:
+        parts.append(caption)
 
-    # Stage B: OCR text extraction
-    ocr_text = run_image_ocr(file_path)
-    if ocr_text:
-        parts.append(f"[OCR] {ocr_text}")
-
-    return "\n".join(parts)
+    unique_parts = list(dict.fromkeys(part for part in parts if part))
+    return "\n".join(unique_parts)
 
 
-# ==============================================================================
-# 3. SUBTITLE & TRANSCRIPT PARSER (.srt, .vtt, .lrc) WITH [MM:SS] TIMESTAMPS
-# ==============================================================================
+
+@lru_cache(maxsize=1)
+def _installed_rapidocr_version() -> str:
+    """Version of the installed `rapidocr` package, or "" if it is not installed."""
+    if importlib.util.find_spec("rapidocr") is None:
+        return ""
+    try:
+        return importlib.metadata.version("rapidocr")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def get_ocr_engine_id() -> str:
+    """Names the OCR backend run_image_ocr will use, or "" if none.
+    Stored per image in the catalog, so images are re-read when it changes.
+    """
+    if _custom_ocr_backend is not None:
+        return "custom"
+    if Image is not None and not _rapidocr_failed and _installed_rapidocr_version():
+        return f"rapidocr-{_installed_rapidocr_version()}"
+    if Image is not None and shutil.which("tesseract"):
+        return "tesseract"
+    return ""
+
+
+def _get_rapidocr_engine():
+    """Creates the shared RapidOCR engine on first use. Call with _rapidocr_lock held."""
+    global _rapidocr_engine, _rapidocr_failed
+    if _rapidocr_engine is None and not _rapidocr_failed:
+        try:
+            from rapidocr import RapidOCR  # type: ignore
+
+            _rapidocr_engine = RapidOCR(
+                params={"Global.log_level": "error", "Global.max_side_len": OCR_MAX_SIDE}
+            )
+        except Exception as e:
+            _rapidocr_failed = True
+            logger.warning(f"RapidOCR could not be started, OCR falls back to Tesseract if installed: {e}")
+    return _rapidocr_engine
+
+
+def _recognize_with_rapidocr(image) -> Optional[List[str]]:
+    """Text lines in reading order, or None if RapidOCR is unavailable."""
+    with _rapidocr_lock:
+        engine = _get_rapidocr_engine()
+        if engine is None:
+            return None
+        result = engine(image)
+    return [text.strip() for text in (getattr(result, "txts", None) or ())]
+
+
+def _recognize_with_tesseract(image) -> List[str]:
+    tesseract_bin = shutil.which("tesseract")
+    if not tesseract_bin:
+        return []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_path = os.path.join(tmpdir, "page.png")
+        image.save(image_path)
+        proc = subprocess.run(
+            [tesseract_bin, image_path, "stdout", "-l", "eng", "--oem", "1"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    if proc.returncode != 0:
+        return []
+    return [line.strip() for line in proc.stdout.splitlines()]
+
+
+def _recognize_lines(image) -> List[str]:
+    lines = _recognize_with_rapidocr(image)
+    if lines is None:
+        lines = _recognize_with_tesseract(image)
+    # Drop fragments without any letter or digit, such as a lone icon read as "□".
+    return [line for line in lines if any(ch.isalnum() for ch in line)]
+
+
+
+def _to_rgb(image):
+    """Converts any Pillow mode to RGB so text keeps its contrast. Returns None if empty."""
+    if image.mode in ("I", "I;16", "I;16B", "I;16L", "I;16N", "F"):
+        # 16-bit and float images: stretch the used value range onto 0..255.
+        image = image.convert("F")
+        low, high = image.getextrema()
+        if high <= low:
+            return None
+        scale = 255.0 / (high - low)
+        return image.point(lambda v: (v - low) * scale).convert("L").convert("RGB")
+
+    has_alpha = image.mode in ("RGBA", "LA", "PA") or (
+        image.mode == "P" and "transparency" in image.info
+    )
+    if not has_alpha:
+        return image.convert("RGB")
+
+    # Transparent pixels usually store black, which would hide black text after RGB
+    # conversion, so paste onto a background that contrasts with the visible pixels.
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    if alpha.getextrema()[1] == 0:
+        return None
+    visible_mask = alpha.point(lambda a: 255 if a >= 128 else 0)
+    if visible_mask.getextrema()[1] == 0:
+        visible_mask = alpha.point(lambda a: 255 if a > 0 else 0)
+    visible_brightness = ImageStat.Stat(rgba.convert("L"), mask=visible_mask).mean[0]
+    background_colour = (0, 0, 0) if visible_brightness > 160 else (255, 255, 255)
+    background = Image.new("RGB", rgba.size, background_colour)
+    background.paste(rgba, mask=alpha)
+    return background
+
+
+def _prepare_page_for_ocr(page):
+    """Returns an upright RGB copy of `page`, or None if it cannot contain text."""
+    width, height = page.size
+    if min(width, height) < MIN_OCR_SIDE or width * height > MAX_OCR_PIXELS:
+        return None
+    try:
+        page = ImageOps.exif_transpose(page)
+    except Exception:
+        pass
+    rgb = _to_rgb(page)
+    if rgb is None:
+        return None
+    low, high = rgb.convert("L").getextrema()
+    if high - low < MIN_OCR_CONTRAST:
+        return None
+    return rgb
+
+
+def _reduce_large_jpeg(img) -> None:
+    """Lets the JPEG decoder skip detail OCR does not use, which is much faster."""
+    width, height = img.size
+    long_side, short_side = max(width, height), min(width, height)
+    if img.format != "JPEG" or long_side <= 2 * OCR_MAX_SIDE or long_side > short_side * TILE_ASPECT_RATIO:
+        return
+    scale = OCR_MAX_SIDE / long_side
+    img.draft("RGB", (int(width * scale), int(height * scale)))
+
+
+def _iter_ocr_pages(img):
+    """Yields each page worth reading: every page of a multi-page TIFF, else the first frame."""
+    page_count = getattr(img, "n_frames", 1) if img.format == "TIFF" else 1
+    for page_index in range(min(page_count, MAX_OCR_PAGES)):
+        try:
+            img.seek(page_index)
+            img.load()
+        except Exception:
+            return
+        yield img
+
+
+def _tile_ranges(length: int, tile_length: int) -> List[Tuple[int, int]]:
+    """Splits 0..length into ranges of tile_length that overlap by 10%."""
+    # With a 10% overlap each extra tile adds 0.9 tile lengths, so this keeps the
+    # number of tiles at or below MAX_OCR_TILES.
+    min_tile_length = math.ceil(length / (0.9 * (MAX_OCR_TILES - 1) + 1))
+    tile_length = max(tile_length, min_tile_length)
+    step = tile_length - tile_length // 10
+
+    ranges = []
+    start = 0
+    while True:
+        end = min(start + tile_length, length)
+        ranges.append((start, end))
+        if end >= length:
+            return ranges
+        start += step
+
+
+def _split_into_tiles(image) -> list:
+    """Splits long, narrow images into overlapping tiles, since the OCR engine would
+    shrink them until their text is unreadable. Other images stay whole.
+    """
+    width, height = image.size
+    if height > OCR_MAX_SIDE and height > width * TILE_ASPECT_RATIO:
+        return [image.crop((0, top, width, bottom))
+                for top, bottom in _tile_ranges(height, OCR_MAX_SIDE)]
+    if width > OCR_MAX_SIDE and width > height * TILE_ASPECT_RATIO:
+        return [image.crop((left, 0, right, height))
+                for left, right in _tile_ranges(width, OCR_MAX_SIDE)]
+    return [image]
+
+
+def _ocr_page(page) -> List[str]:
+    lines: List[str] = []
+    previous_tile_lines: set = set()
+    for tile in _split_into_tiles(page):
+        tile_lines = _recognize_lines(tile)
+        # Text inside the overlap between two tiles is read twice; keep one copy.
+        lines.extend(line for line in tile_lines if line not in previous_tile_lines)
+        previous_tile_lines = set(tile_lines)
+    return lines
+
+
+def run_image_ocr(file_path: str) -> str:
+    """Returns the text visible in an image, or "". Never raises.
+    Tries a registered backend, then RapidOCR, then the tesseract command.
+    """
+    if _custom_ocr_backend is not None:
+        try:
+            result = _custom_ocr_backend(file_path)
+            return result.strip() if result else ""
+        except Exception as e:
+            logger.error(f"Custom OCR backend failed on {file_path}: {e}")
+            return ""
+
+    if Image is None or not get_ocr_engine_id():
+        return ""
+
+    page_texts: List[str] = []
+    try:
+        with Image.open(file_path) as img:
+            if img.size[0] * img.size[1] > MAX_OCR_PIXELS:
+                return ""
+            _reduce_large_jpeg(img)
+            for page in _iter_ocr_pages(img):
+                prepared = _prepare_page_for_ocr(page)
+                if prepared is not None:
+                    page_texts.append("\n".join(_ocr_page(prepared)))
+    except OSError as e:
+        # Missing, unreadable, truncated or not really an image.
+        logger.debug(f"Could not read image for OCR {file_path}: {e}")
+    except Exception as e:
+        logger.warning(f"OCR failed on {file_path}: {e}")
+
+    if len(page_texts) > 1:
+        return "\n".join(
+            f"[Page {number}] {text}" for number, text in enumerate(page_texts, start=1) if text
+        )
+    return page_texts[0] if page_texts else ""
+
+
+def combine_image_text(metadata: str, ocr_text: str) -> str:
+    return "\n".join(part for part in (metadata, ocr_text) if part)
+
+
+def extract_text_image(file_path: str, include_ocr: bool = True) -> str:
+    """Searchable text of an image: its metadata, plus the OCR text when `include_ocr`."""
+    metadata = read_image_metadata(file_path)
+    if not include_ocr:
+        return metadata
+    return combine_image_text(metadata, run_image_ocr(file_path))
 
 
 def _parse_timecode_to_seconds(tc: str) -> Optional[float]:
@@ -517,11 +734,7 @@ def _parse_timecode_to_seconds(tc: str) -> Optional[float]:
 
 
 def parse_subtitle_text(raw_content: str) -> str:
-    """
-    Parses SRT (`.srt`), WebVTT (`.vtt`), or LRC (`.lrc`) subtitle/lyric content
-    into normalized `[MM:SS] dialog text` lines so search snippets show the exact
-    timestamp where a spoken phrase occurs.
-    """
+    """Converts SRT, WebVTT or LRC content into `[MM:SS] text` lines."""
     lines = raw_content.splitlines()
     entries: List[str] = []
 
@@ -627,11 +840,6 @@ def find_and_parse_sidecar_subtitles(media_path: str) -> str:
             pass
 
     return "\n".join(parsed_chunks)
-
-
-# ==============================================================================
-# 4. NATIVE BINARY AUDIO/VIDEO CONTAINER METADATA PARSERS
-# ==============================================================================
 
 
 def _parse_id3_tags(data: bytes) -> List[str]:
@@ -801,11 +1009,7 @@ def _parse_wav_metadata(file_path: str) -> List[str]:
 
 
 def _parse_mp4_atoms(file_path: str) -> Tuple[List[str], List[str]]:
-    """
-    Pure-Python parser for MP4/M4A/MOV container metadata (`mvhd` duration, `ilst` tags)
-    and embedded `tx3g`/`wvtt` subtitle text samples.
-    Returns `(metadata_lines, subtitle_lines)`.
-    """
+    """Reads MP4/M4A/MOV metadata and embedded subtitles. Returns (metadata_lines, subtitle_lines)."""
     meta_lines: List[str] = []
     sub_lines: List[str] = []
 
@@ -885,13 +1089,8 @@ def _parse_vorbis_comments(file_path: str) -> List[str]:
 
 
 def run_audio_asr(file_path: str) -> str:
-    """
-    Runs Speech-to-Text Automatic Speech Recognition (ASR) on an audio or video file
-    using the best available local model:
-      1. Custom registered ASR backend (`register_asr_backend`)
-      2. `faster_whisper` (if installed)
-      3. `whisper` (if installed)
-    Returns timestamped lines formatted as `[MM:SS] transcribed speech`.
+    """Transcribes speech with the first available backend: registered, faster_whisper,
+    openai-whisper, then the whisper command. Returns "" if none works.
     """
     if _custom_asr_backend is not None:
         try:
@@ -942,12 +1141,7 @@ def run_audio_asr(file_path: str) -> str:
 
 
 def extract_text_audio(file_path: str) -> str:
-    """
-    Two-stage Audio Extractor (`.mp3`, `.wav`, `.flac`, `.m4a`, `.ogg`, `.aac`):
-      - Stage A: Instant binary tag extraction (ID3v1/v2, RIFF/WAV INFO, Vorbis, MP4 atoms)
-                 + sidecar `.srt`/`.vtt`/`.lrc` timestamped transcripts.
-      - Stage B: Speech-to-Text ASR with `[MM:SS]` timestamps.
-    """
+    """Audio tags and sidecar transcripts, plus speech-to-text when no transcript exists."""
     ext = Path(file_path).suffix.lower()
     parts: List[str] = []
 
@@ -988,12 +1182,7 @@ def extract_text_audio(file_path: str) -> str:
 
 
 def extract_text_video(file_path: str) -> str:
-    """
-    Two-stage Video Extractor (`.mp4`, `.mkv`, `.mov`, `.webm`, `.avi`):
-      - Stage A: Instant container metadata (MP4/MOV atoms, duration) + sidecar `.srt`/`.vtt`
-                 subtitles and embedded subtitle streams with `[MM:SS]` timestamps.
-      - Stage B: Audio ASR fallback with `[MM:SS]` timestamps.
-    """
+    """Container metadata and subtitles, plus speech-to-text when no subtitles exist."""
     ext = Path(file_path).suffix.lower()
     parts: List[str] = [f"[Video {ext.lstrip('.').upper()}]"]
 

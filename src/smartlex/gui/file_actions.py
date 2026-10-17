@@ -1,8 +1,4 @@
-"""
-Cross-platform "open file" and "show in folder" actions for search results.
-
-Kept free of Qt so the command each platform runs can be unit-tested.
-"""
+"""Cross-platform "open file" and "show in folder" commands, kept Qt-free for testing."""
 
 import os
 import subprocess
@@ -22,12 +18,7 @@ def build_open_command(file_path: str, platform: str = sys.platform) -> List[str
 
 
 def build_reveal_command(file_path: str, platform: str = sys.platform) -> List[str]:
-    """
-    Returns the command that shows `file_path` in the system file manager.
-      - Windows: Explorer opens the folder with the file selected.
-      - macOS:   Finder opens the folder with the file selected.
-      - Linux:   The default file manager opens the containing folder.
-    """
+    """Returns the command that shows `file_path` in the system file manager."""
     if platform == "win32":
         # "/select," and the path are passed as separate arguments so paths
         # containing spaces are quoted correctly by subprocess.

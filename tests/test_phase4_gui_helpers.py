@@ -19,17 +19,8 @@ from smartlex.gui.result_formatting import (
 
 
 class TestPhase4GuiHelpers(unittest.TestCase):
-    """
-    Verifies the Qt-free logic behind the Phase 4 search window:
-      1. Filter pills build the right query (and match the C++ `type:` categories)
-      2. Snippet highlighting is correct AND safe (HTML-escaped)
-      3. Result card details (type name, size, modified time, missing files)
-      4. Progress bar parsing and open/reveal commands per platform
-    """
+    """Qt-free search window logic: filter pills, snippet highlighting, details and progress."""
 
-    # ------------------------------------------------------------------
-    # 1. Filter pills
-    # ------------------------------------------------------------------
 
     def test_build_search_query_combines_text_and_pill(self):
         self.assertEqual(build_search_query("invoice 2024", ""), "invoice 2024")
@@ -65,9 +56,6 @@ class TestPhase4GuiHelpers(unittest.TestCase):
         self.assertEqual(get_file_category("/x/Report.PDF"), "doc")
         self.assertEqual(get_file_category("/x/subtitles.srt"), "")
 
-    # ------------------------------------------------------------------
-    # 2. Snippet highlighting
-    # ------------------------------------------------------------------
 
     def test_highlight_wraps_matched_words_case_insensitively(self):
         html_text = highlight_snippet_html("Total due for Invoice 2024", ["invoice", "2024"])
@@ -91,9 +79,6 @@ class TestPhase4GuiHelpers(unittest.TestCase):
         self.assertEqual(highlight_snippet_html("", ["x"]), "")
         self.assertEqual(highlight_snippet_html("a < b", []), "a &lt; b")
 
-    # ------------------------------------------------------------------
-    # 3. Result card details
-    # ------------------------------------------------------------------
 
     def test_format_file_size(self):
         self.assertEqual(format_file_size(0), "0 B")
@@ -121,9 +106,6 @@ class TestPhase4GuiHelpers(unittest.TestCase):
         self.assertEqual(missing.type_name, "File")
         self.assertEqual(missing.size_text, "")
 
-    # ------------------------------------------------------------------
-    # 4. Progress parsing & file actions
-    # ------------------------------------------------------------------
 
     def test_parse_indexing_progress(self):
         self.assertEqual(

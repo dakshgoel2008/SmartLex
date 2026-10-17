@@ -21,6 +21,8 @@ dependencies = [
     "Pillow>=10.0.0",
     "PyMuPDF>=1.23.8",
     "watchdog>=3.0.0",
+    "rapidocr>=3.0.0",
+    "onnxruntime>=1.17.0",
 ]
 
 [project.scripts]

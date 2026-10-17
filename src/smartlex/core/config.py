@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
         ".webp",
         ".bmp",
         ".tiff",
+        ".tif",
         ".gif",
         # Audio Recordings (ID3/RIFF/Vorbis/MP4 Tags + Transcripts/ASR)
         ".mp3",
@@ -77,11 +78,7 @@ def get_app_data_dir() -> Path:
 
 
 def load_config() -> dict:
-    """
-    Loads configuration from `./config.json` (when running inside the project repo)
-    or `~/.smartlex/config.json` (when installed globally via PyPI), merging with
-    `DEFAULT_CONFIG`.
-    """
+    """Loads ./config.json (in the repo) or ~/.smartlex/config.json, merged over DEFAULT_CONFIG."""
     merged = dict(DEFAULT_CONFIG)
 
     if CONFIG_FILE.exists():

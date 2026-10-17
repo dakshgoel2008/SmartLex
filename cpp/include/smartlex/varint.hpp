@@ -6,26 +6,8 @@
 
 namespace smartlex {
 
-/**
- * Variable-Byte (VarInt) & Delta Compression Utilities.
- *
- * Why we use this:
- * A normal 32-bit integer (uint32_t) always takes 4 bytes on disk and in RAM,
- * even if the number is small (like 1, 2, or 15).
- *
- * In an inverted index, document IDs and word positions are stored in sorted order:
- *   Original positions: [100, 102, 107, 108]
- *   Delta-encoded:      [100,   2,   5,   1]  (each number minus the previous number)
- *
- * Because the deltas are tiny numbers (< 128), VarInt encodes each of them in
- * just 1 byte instead of 4 bytes — shrinking our index size by ~75-80%!
- *
- * How VarInt works:
- * - Each byte holds 7 bits of the number (the lower 7 bits: 0x7F).
- * - The 8th bit (0x80) is a "continuation flag":
- *     - 1 means "more bytes follow for this number".
- *     - 0 means "this is the final byte of this number".
- */
+// Variable-byte integers: 7 bits per byte, high bit set while more bytes follow.
+// Sorted lists are delta-encoded first, so most values fit in one byte.
 class VarIntCodec {
 public:
     // Appends a single uint32_t to the byte buffer using 1 to 5 bytes.

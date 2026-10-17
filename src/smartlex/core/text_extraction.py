@@ -72,11 +72,7 @@ def _ocr_scanned_pdf_pages(file_path: str, max_pages: int = 10) -> str:
 
 
 def extract_text_pdf(file_path: str) -> str:
-    """
-    Extracts full text from a PDF file with `[Page N]` markers.
-    Uses PyMuPDF (`fitz`) when available, or falls back to Poppler's `pdftotext`.
-    Automatically falls back to OCR for scanned image-only PDFs when an OCR backend is active.
-    """
+    """Extracts PDF text with `[Page N]` markers, falling back to pdftotext, then OCR."""
     if fitz is not None:
         pages_text = []
         try:
@@ -120,7 +116,7 @@ def extract_text_pdf(file_path: str) -> str:
 
 def extract_text_docx(file_path: str) -> str:
     """
-    Extracts 100% of text from a Word (.docx) file, including paragraphs,
+    Extracts the text of a Word (.docx) file, including paragraphs,
     tables, headers, and footers, by reading the OpenXML ZIP archive directly.
     """
     chunks = []
@@ -245,17 +241,13 @@ PLAIN_TEXT_EXTENSIONS = {
 }
 
 
-def extract_text_from_file(file_path: str) -> str:
-    """
-    Unified multimodal file text extractor supporting:
-      - PDFs (.pdf with [Page N] markers + scanned PDF OCR fallback)
-      - Office Archives (.docx, .xlsx with [Sheet: Name], .pptx with [Slide N], .odt/.ods/.odp)
-      - E-Books (.epub with [Chapter N] markers)
-      - Images & Screenshots (.png, .jpg, .webp, .bmp, .tiff, .gif -> EXIF/PNG tags + OCR)
-      - Audio (.mp3, .wav, .flac, .m4a, .ogg -> ID3/RIFF/Vorbis/MP4 tags + transcripts/ASR)
-      - Video (.mp4, .mkv, .mov, .webm, .avi -> Container metadata + [MM:SS] subtitles/ASR)
-      - Subtitles/Lyrics (.srt, .vtt, .lrc -> [MM:SS] timestamped text)
-      - Plain Text & Source Code (.txt, .md, .csv, .json, .py, .cpp, .html, etc.)
+def is_image_file(file_path: str) -> bool:
+    return Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
+
+
+def extract_text_from_file(file_path: str, include_ocr: bool = True) -> str:
+    """Extracts searchable text from any supported file type.
+    With include_ocr=False, images return only their metadata.
     """
     ext = Path(file_path).suffix.lower()
     if ext == ".pdf":
@@ -271,7 +263,7 @@ def extract_text_from_file(file_path: str) -> str:
     if ext in {".odt", ".ods", ".odp"}:
         return extract_text_odf(file_path)
     if ext in IMAGE_EXTENSIONS:
-        return extract_text_image(file_path)
+        return extract_text_image(file_path, include_ocr=include_ocr)
     if ext in AUDIO_EXTENSIONS:
         return extract_text_audio(file_path)
     if ext in VIDEO_EXTENSIONS:

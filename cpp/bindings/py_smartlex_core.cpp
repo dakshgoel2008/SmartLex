@@ -11,9 +11,7 @@
 
 namespace {
 
-/**
- * Python object wrapper around C++ `smartlex::InvertedIndex`.
- */
+// Python object wrapping smartlex::InvertedIndex.
 struct PyNativeIndexObject {
     PyObject_HEAD
     smartlex::InvertedIndex* index;
@@ -374,11 +372,10 @@ PyObject* py_scan_directories(PyObject* /*self*/, PyObject* args, PyObject* kwds
     files = smartlex::FileScanner::scan_directories(roots, exts, threads);
     Py_END_ALLOW_THREADS
 
-    PyObject* py_list = PyList_New(static_cast<Py_ssize_t>(files.size()));
+    PyObject* py_list = PyList_New(0);
     if (!py_list) return nullptr;
 
-    for (size_t i = 0; i < files.size(); ++i) {
-        const auto& f = files[i];
+    for (const auto& f : files) {
         PyObject* tuple = Py_BuildValue(
             "(sKKi)",
             f.path.c_str(),
@@ -386,7 +383,22 @@ PyObject* py_scan_directories(PyObject* /*self*/, PyObject* args, PyObject* kwds
             static_cast<unsigned long long>(f.file_size),
             f.priority_tier
         );
-        PyList_SET_ITEM(py_list, static_cast<Py_ssize_t>(i), tuple);
+        if (!tuple) {
+            // File names that are not valid UTF-8 cannot become Python str objects
+            // the rest of SmartLex can store, so such files are skipped.
+            if (PyErr_ExceptionMatches(PyExc_UnicodeDecodeError)) {
+                PyErr_Clear();
+                continue;
+            }
+            Py_DECREF(py_list);
+            return nullptr;
+        }
+        int append_status = PyList_Append(py_list, tuple);
+        Py_DECREF(tuple);
+        if (append_status != 0) {
+            Py_DECREF(py_list);
+            return nullptr;
+        }
     }
     return py_list;
 }

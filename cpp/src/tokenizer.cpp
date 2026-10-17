@@ -37,13 +37,6 @@ inline bool is_word_byte(unsigned char c) {
            (c >= 0x80);  // Preserve UTF-8 multi-byte characters
 }
 
-inline char to_lower_ascii(unsigned char c) {
-    if (c >= 'A' && c <= 'Z') {
-        return static_cast<char>(c + ('a' - 'A'));
-    }
-    return static_cast<char>(c);
-}
-
 inline bool ends_with(const std::string& word, const std::string& suffix) {
     if (word.size() < suffix.size()) {
         return false;
@@ -51,14 +44,135 @@ inline bool ends_with(const std::string& word, const std::string& suffix) {
     return word.compare(word.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+enum class CharKind { Word, Separator, Ignorable };
+
+// Unicode punctuation and symbols (dashes, quotes, bullets, emoji, ...) separate words;
+// letters and digits of every script are part of words.
+CharKind classify_code_point(uint32_t cp) {
+    // Soft hyphen and zero-width (non-)joiners sit inside words without splitting them.
+    if (cp == 0x00AD || cp == 0x200C || cp == 0x200D) {
+        return CharKind::Ignorable;
+    }
+    if (cp >= 0x00A0 && cp <= 0x00BF) {
+        // Latin-1 punctuation, except the letter/number-like characters in this range.
+        bool letter_like = cp == 0x00AA || cp == 0x00B2 || cp == 0x00B3 || cp == 0x00B5 ||
+                           cp == 0x00B9 || cp == 0x00BA || (cp >= 0x00BC && cp <= 0x00BE);
+        return letter_like ? CharKind::Word : CharKind::Separator;
+    }
+    if (cp == 0x00D7 || cp == 0x00F7) {  // multiplication and division signs
+        return CharKind::Separator;
+    }
+    if ((cp >= 0x2000 && cp <= 0x206F) ||    // general punctuation and spaces
+        (cp >= 0x2190 && cp <= 0x21FF) ||    // arrows
+        (cp >= 0x2500 && cp <= 0x27BF) ||    // box drawing, shapes, symbols, dingbats
+        (cp >= 0x3000 && cp <= 0x3004) ||    // CJK space and punctuation
+        (cp >= 0x3008 && cp <= 0x3011) ||    // CJK brackets
+        (cp >= 0xFF01 && cp <= 0xFF0F) ||    // fullwidth punctuation
+        (cp >= 0xFF1A && cp <= 0xFF20) ||
+        (cp >= 0xFF3B && cp <= 0xFF40) ||
+        (cp >= 0xFF5B && cp <= 0xFF65) ||
+        cp == 0xFEFF ||                      // byte order mark
+        (cp >= 0x1F300 && cp <= 0x1FAFF)) {  // emoji
+        return CharKind::Separator;
+    }
+    return CharKind::Word;
+}
+
+constexpr uint32_t kInvalidCodePoint = 0xFFFFFFFF;
+
+// Reads the UTF-8 character at text[pos] and advances pos past it. Invalid bytes are
+// returned one at a time as word bytes with code_point = kInvalidCodePoint.
+CharKind read_char(const std::string& text, size_t& pos, uint32_t& code_point) {
+    code_point = kInvalidCodePoint;
+    unsigned char lead = static_cast<unsigned char>(text[pos]);
+    if (lead < 0x80) {
+        pos += 1;
+        code_point = lead;
+        return is_word_byte(lead) ? CharKind::Word : CharKind::Separator;
+    }
+
+    size_t length = 0;
+    if ((lead & 0xE0) == 0xC0) {
+        length = 2;
+    } else if ((lead & 0xF0) == 0xE0) {
+        length = 3;
+    } else if ((lead & 0xF8) == 0xF0) {
+        length = 4;
+    }
+    if (length == 0 || pos + length > text.size()) {
+        pos += 1;
+        return CharKind::Word;
+    }
+
+    uint32_t cp = lead & (0x7F >> length);
+    for (size_t k = 1; k < length; ++k) {
+        unsigned char next = static_cast<unsigned char>(text[pos + k]);
+        if ((next & 0xC0) != 0x80) {
+            pos += 1;
+            return CharKind::Word;
+        }
+        cp = (cp << 6) | (next & 0x3F);
+    }
+    pos += length;
+    code_point = cp;
+    return classify_code_point(cp);
+}
+
+// Lowercases ASCII, Latin-1, Latin Extended-A, Greek and Cyrillic capital letters.
+uint32_t to_lower_code_point(uint32_t cp) {
+    if (cp >= 'A' && cp <= 'Z') return cp + 0x20;
+    if (cp >= 0x00C0 && cp <= 0x00DE && cp != 0x00D7) return cp + 0x20;
+    if (cp == 0x0130) return 'i';  // capital I with dot above
+    if (cp >= 0x0100 && cp <= 0x0137 && cp % 2 == 0) return cp + 1;
+    if (cp >= 0x0139 && cp <= 0x0148 && cp % 2 == 1) return cp + 1;
+    if (cp >= 0x014A && cp <= 0x0177 && cp % 2 == 0) return cp + 1;
+    if (cp == 0x0178) return 0x00FF;
+    if (cp >= 0x0179 && cp <= 0x017E && cp % 2 == 1) return cp + 1;
+    if (cp >= 0x0391 && cp <= 0x03A9 && cp != 0x03A2) return cp + 0x20;
+    if (cp >= 0x0410 && cp <= 0x042F) return cp + 0x20;
+    if (cp >= 0x0400 && cp <= 0x040F) return cp + 0x50;
+    return cp;
+}
+
+void append_utf8(std::string& out, uint32_t cp) {
+    if (cp < 0x80) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+// Appends the lowercase form of the character text[start, end) to `out`.
+void append_lowercase_char(std::string& out, const std::string& text,
+                           size_t start, size_t end, uint32_t code_point) {
+    if (code_point == kInvalidCodePoint) {
+        out.append(text, start, end - start);
+        return;
+    }
+    append_utf8(out, to_lower_code_point(code_point));
+}
+
 }  // namespace
 
 std::string Tokenizer::normalize_word(const std::string& word) {
     std::string out;
     out.reserve(word.size());
-    for (unsigned char c : word) {
-        if (is_word_byte(c)) {
-            out.push_back(to_lower_ascii(c));
+    size_t pos = 0;
+    uint32_t code_point = 0;
+    while (pos < word.size()) {
+        size_t start = pos;
+        if (read_char(word, pos, code_point) == CharKind::Word) {
+            append_lowercase_char(out, word, start, pos, code_point);
         }
     }
     return out;
@@ -141,10 +255,14 @@ std::vector<Token> Tokenizer::tokenize(const std::string& raw_text) {
     current.reserve(32);
     uint32_t position = 0;
 
-    for (unsigned char c : raw_text) {
-        if (is_word_byte(c)) {
-            current.push_back(to_lower_ascii(c));
-        } else if (!current.empty()) {
+    size_t pos = 0;
+    uint32_t code_point = 0;
+    while (pos < raw_text.size()) {
+        size_t start = pos;
+        CharKind kind = read_char(raw_text, pos, code_point);
+        if (kind == CharKind::Word) {
+            append_lowercase_char(current, raw_text, start, pos, code_point);
+        } else if (kind == CharKind::Separator && !current.empty()) {
             tokens.push_back(Token{current, stem_word(current), position++});
             current.clear();
         }

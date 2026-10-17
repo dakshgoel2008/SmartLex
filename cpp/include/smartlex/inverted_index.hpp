@@ -10,9 +10,7 @@
 
 namespace smartlex {
 
-/**
- * Metadata stored per indexed document.
- */
+// Metadata stored per indexed document.
 struct DocumentMeta {
     uint32_t doc_id = 0;
     std::string path;           // Full normalized file path
@@ -24,19 +22,14 @@ struct DocumentMeta {
     bool is_deleted = false;    // Tombstone flag for instant incremental deletion/updates
 };
 
-/**
- * Decoded posting for a single document containing a given term.
- */
+// Decoded posting for one document containing a term.
 struct Posting {
     uint32_t doc_id = 0;
     uint32_t title_tf = 0;                  // Occurrences in filename/title
     std::vector<uint32_t> body_positions;   // Sorted 0-based token positions in body text
 };
 
-/**
- * Compressed posting list for a single term in the vocabulary.
- * Kept compressed in memory using Delta + VarInt encoding so RAM usage stays minimal.
- */
+// A term's postings, kept delta + VarInt compressed in memory.
 struct CompressedPostingList {
     uint32_t doc_count = 0;                 // Number of documents in this posting list
     uint32_t last_doc_id = 0;               // Used for delta-encoding consecutive doc_ids
@@ -44,9 +37,7 @@ struct CompressedPostingList {
     std::vector<uint8_t> compressed_bytes;  // VarInt + Delta encoded stream of Postings
 };
 
-/**
- * Ranked search result returned by the C++ engine.
- */
+// Ranked search result.
 struct SearchResult {
     uint32_t doc_id = 0;
     std::string path;
@@ -56,15 +47,7 @@ struct SearchResult {
     std::vector<std::string> matched_words; // Words that matched in this document (including fuzzy/stem)
 };
 
-/**
- * Parsed representation of a user's search query.
- * Supports:
- *   - Regular keywords:       machine learning 2024
- *   - Exact phrases:          "neural network"
- *   - Extension filter:       ext:pdf  or  type:docx
- *   - Path filter:            path:reports  or  in:downloads
- *   - Excluded keywords:      -draft  -old
- */
+// Parsed query: keywords, "exact phrases", ext:/type:, path:/in: and -excluded terms.
 struct ParsedQuery {
     std::vector<std::string> terms;
     std::vector<std::vector<std::string>> exact_phrases;
@@ -78,82 +61,48 @@ class InvertedIndex {
 public:
     InvertedIndex() = default;
 
-    /**
-     * Adds or updates a document in the inverted index.
-     * If `path` already exists in the index, its previous doc_id is marked as deleted
-     * (tombstoned) in O(1) time before adding the new version.
-     *
-     * Returns the assigned doc_id.
-     */
+    // Adds or replaces a document (the old version is tombstoned). Returns its doc_id.
     uint32_t add_document(const std::string& path,
                           const std::string& raw_text,
                           uint64_t mtime_ns = 0,
                           uint64_t file_size = 0);
 
-    /**
-     * Marks a document path as deleted in O(1) time using a tombstone flag.
-     * Returns true if the document existed and was removed.
-     */
+    // Tombstones a document. Returns true if it existed.
     bool remove_document(const std::string& path);
 
-    /**
-     * Updates a document's path in O(1) time when a file is moved to another folder.
-     */
+    // Changes a document's path, e.g. after a move.
     bool rename_document(const std::string& old_path, const std::string& new_path);
 
-    /**
-     * Checks if a document at `path` is already indexed with the exact same
-     * modification timestamp (`mtime_ns`) and `file_size`.
-     * Enables zero-wait incremental startup (skipping unchanged files immediately).
-     */
+    // True if `path` is indexed with the same mtime and size.
     bool is_up_to_date(const std::string& path, uint64_t mtime_ns, uint64_t file_size) const;
 
-    /**
-     * Executes a full search query using BM25F + Exact Phrase + Proximity + Fuzzy Typo Tolerance.
-     */
+    // BM25F search with exact phrases, proximity boost and typo tolerance.
     std::vector<SearchResult> search(const std::string& raw_query, size_t max_results = 100) const;
 
-    /**
-     * Returns the top prefix-matched or frequency-ranked autocomplete words.
-     */
+    // Most frequent words, optionally starting with `prefix`.
     std::vector<std::string> suggest_autocomplete(const std::string& prefix = "",
                                                   size_t max_words = 100) const;
 
-    /**
-     * Returns all indexed keywords for a given file path (for backwards compatibility).
-     */
+    // Most frequent words of one document (legacy API).
     std::vector<std::string> get_document_keywords(const std::string& path,
                                                    size_t max_keywords = 150) const;
 
-    /**
-     * Saves the compressed binary index to disk (`.slex` format).
-     * Automatically compacts out any deleted/tombstoned documents during save.
-     */
+    // Writes the index to a .slex file, tombstones included.
     bool save_binary(const std::string& file_path) const;
 
-    /**
-     * Loads a compressed binary index from disk (`.slex` format).
-     */
+    // Reads a .slex file; returns false (leaving the index unchanged) if it is invalid.
     bool load_binary(const std::string& file_path);
 
-    /**
-     * Parses a raw query string into terms, phrases, and filters.
-     */
+    // Splits a raw query into terms, phrases and filters.
     static ParsedQuery parse_query(const std::string& raw_query);
 
-    /**
-     * Number of active (non-deleted) documents in the index.
-     */
+    // Number of documents that are not deleted.
     size_t active_document_count() const;
 
-    /**
-     * Total number of unique terms in the inverted index dictionary.
-     */
+    // Number of unique terms.
     size_t vocabulary_size() const;
 
-    /**
-     * Returns all active document paths currently in the index.
-     */
+    // Paths of all documents that are not deleted.
     std::vector<std::string> get_all_paths() const;
 
 private:

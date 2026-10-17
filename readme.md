@@ -74,6 +74,17 @@ Whether you use the `.exe` or the `smartlex` terminal command, the application w
 
 ---
 
+### Searching Images
+
+Screenshots, photos and scans are searchable by the text visible inside them.
+
+- **Instant metadata.** Size, format, PNG text chunks, EXIF, XMP and a sidecar `photo.txt` or `photo.caption` are indexed immediately.
+- **OCR in the background.** Text inside images is read by [RapidOCR](https://github.com/RapidAI/RapidOCR) after all documents are indexed. The progress bar shows "Reading text in images". You can search while it runs.
+- **Once per image.** Each picture is read only once. It is read again only when the file changes or a different OCR engine is installed. Moved files and identical copies are not read again.
+- **Unusual images.** Rotated phone photos, transparent logos, 16-bit images, multi-page TIFF scans and long scrolling screenshots are handled. Blank, tiny or extremely large images are skipped.
+
+RapidOCR is installed with the package. Without it, SmartLex falls back to the `tesseract` command if it is on your `PATH`, and otherwise indexes image metadata only.
+
 ##  How It Works
 
 ### Architecture

@@ -40,15 +40,16 @@ stem_word = _core.stem_word
 edit_distance = _core.edit_distance
 
 
+def _clean_text(text: str) -> str:
+    """The C++ core takes NUL-terminated strings, so a NUL byte inside text would be
+    rejected. NUL bytes are common in EXIF fields and UTF-16 files read as UTF-8."""
+    if text and "\x00" in text:
+        return text.replace("\x00", " ")
+    return text or ""
+
+
 class SmartLexEngine:
-    """
-    Unified Phase-1 & Phase-2 Search & Indexing Engine combining:
-    1. C++20 Thread-Safe Compressed Positional Inverted Index (`_smartlex_core.NativeIndex`)
-       for sub-millisecond BM25F ranking, exact phrase search, proximity scoring,
-       and typo-tolerant fuzzy search.
-    2. SQLite WAL Document Catalog (`CatalogDB`) for zero-reindexing incremental
-       updates, move/rename detection, and instant Google-style context snippets.
-    """
+    """Search engine combining the C++ inverted index with the SQLite catalog."""
 
     def __init__(
         self,
@@ -60,12 +61,7 @@ class SmartLexEngine:
         self.native_index = NativeIndex()
 
     def index_filenames_tier0(self, paths: Iterable[str]) -> int:
-        """
-        Tier-0 Instant Filename Indexer:
-        Immediately registers discovered file paths in the C++ index (using their
-        filename & path tokens) BEFORE slow document content extraction runs.
-        Makes 100% of files searchable by name/extension in < 1 second!
-        """
+        """Adds new paths with empty content so they are searchable by name before extraction."""
         existing = set(self.native_index.get_all_paths())
         added = 0
         for p in paths:
@@ -82,6 +78,7 @@ class SmartLexEngine:
         file_size: int = 0,
         content_hash: str = "",
         save_to_catalog: bool = True,
+        ocr_engine: str = "",
     ) -> int:
         """Indexes a single document in C++ and optionally persists text to SQLite."""
         if mtime_ns == 0 and file_size == 0:
@@ -89,13 +86,14 @@ class SmartLexEngine:
             if stat_info is not None:
                 mtime_ns, file_size = stat_info
 
+        raw_text = _clean_text(raw_text)
         doc_id = self.native_index.add_document(path, raw_text, mtime_ns, file_size)
 
         if save_to_catalog:
             if not content_hash:
                 content_hash = self.catalog.compute_file_hash(path)
             self.catalog.upsert_documents_batch(
-                [(path, mtime_ns, file_size, content_hash, raw_text)]
+                [(path, mtime_ns, file_size, content_hash, raw_text)], ocr_engine=ocr_engine
             )
         return doc_id
 
@@ -106,12 +104,7 @@ class SmartLexEngine:
         new_mtime_ns: int = 0,
         file_size: int = 0,
     ) -> bool:
-        """
-        Handles a moved or renamed file without re-extracting its PDF/DOCX content!
-        - Reuses the compressed text stored in SQLite `CatalogDB`.
-        - If only the directory changed (same filename), updates the C++ path in O(1).
-        - If the filename changed, re-indexes the cached text under the new filename in <0.1ms.
-        """
+        """Moves a document to a new path, reusing its stored text instead of re-extracting it."""
         cached_text = self.catalog.rename_document(old_path, new_path, new_mtime_ns)
         if cached_text is None:
             # Fallback if old_path wasn't in SQLite catalog
@@ -124,27 +117,30 @@ class SmartLexEngine:
                 return True
 
         self.native_index.remove_document(old_path)
-        self.native_index.add_document(new_path, cached_text, new_mtime_ns, file_size)
+        self.native_index.add_document(new_path, _clean_text(cached_text), new_mtime_ns, file_size)
         return True
 
     def add_documents_batch(
-        self, records: List[Tuple[str, int, int, str, str]]
+        self, records: List[Tuple[str, int, int, str, str]], ocr_engine: str = ""
     ) -> int:
-        """
-        Adds a batch of (path, mtime_ns, file_size, content_hash, raw_text) records
-        into both the C++ Inverted Index and the SQLite WAL Catalog.
+        """Indexes (path, mtime_ns, file_size, content_hash, raw_text) records and saves them.
+        `ocr_engine` names the OCR backend that read them ("" = not OCR'd).
         """
         if not records:
             return 0
 
-        for path, mtime_ns, file_size, _content_hash, raw_text in records:
+        cleaned = [
+            (path, mtime_ns, file_size, content_hash, _clean_text(raw_text))
+            for path, mtime_ns, file_size, content_hash, raw_text in records
+        ]
+        for path, mtime_ns, file_size, _content_hash, raw_text in cleaned:
             self.native_index.add_document(path, raw_text, mtime_ns, file_size)
 
-        self.catalog.upsert_documents_batch(records)
-        return len(records)
+        self.catalog.upsert_documents_batch(cleaned, ocr_engine=ocr_engine)
+        return len(cleaned)
 
     def remove_documents(self, paths: Iterable[str]) -> int:
-        """Removes deleted files from both the C++ index (via O(1) tombstone) and catalog."""
+        """Removes deleted files from both the C++ index (as tombstones) and the catalog."""
         path_list = list(paths)
         removed = 0
         for p in path_list:
@@ -194,14 +190,19 @@ class SmartLexEngine:
         return self.native_index.save_binary(target)
 
     def load(self, index_file: Optional[str] = None) -> bool:
-        """Loads the compressed binary `.slex` index from disk."""
+        """Loads the .slex index, then adds catalog rows written after it was last saved."""
         target = str(index_file or self.index_file)
-        if Path(target).exists():
-            if self.native_index.load_binary(target):
-                return True
-        return False
+        if not Path(target).exists():
+            return False
+        saved_at = os.path.getmtime(target)
+        if not self.native_index.load_binary(target):
+            return False
+        for path, mtime_ns, file_size, text in self.catalog.iter_documents_updated_after(saved_at):
+            if os.path.exists(path):
+                self.native_index.add_document(path, _clean_text(text), mtime_ns, file_size)
+        return True
 
-    # --- Dictionary-compatible interface for legacy callers ---
+    # Dictionary-style interface for legacy callers
 
     def __len__(self) -> int:
         return self.native_index.active_document_count()

@@ -1,13 +1,4 @@
-"""
-Phase 4 widgets for the SmartLex search window:
-
-  - FilterPillBar:    a row of "All / Docs / Sheets / ..." toggle pills.
-  - ResultCard:       one rich search result (icon, name, folder, highlighted snippet, details).
-  - ResultListWidget: a QListWidget that hosts ResultCards and keeps their heights correct.
-
-All decisions about *what* to display come from `result_formatting.py`; this
-module only lays it out with Qt.
-"""
+"""Search window widgets: filter pills, result cards and the result list."""
 
 from typing import Any, Dict, Optional
 
@@ -33,11 +24,7 @@ from smartlex.gui.result_formatting import (
 
 
 class FilterPillBar(QWidget):
-    """
-    A row of exclusive toggle buttons, one per file category.
-    Emits `category_changed(category_key)` when the user picks a pill
-    ("" means "All").
-    """
+    """Exclusive category toggle buttons; emits category_changed(key), "" meaning All."""
 
     category_changed = pyqtSignal(str)
 
@@ -84,14 +71,7 @@ class FilterPillBar(QWidget):
 
 
 class ResultCard(QFrame):
-    """
-    Displays one search result:
-
-        invoice_2024.pdf
-            /home/user/Documents/Finance
-            ...the total due for invoice 2024 is $1,250...
-            PDF Document  •  1.4 MB  •  Modified 16 Oct 2026, 21:24
-    """
+    """One search result: file name, folder, highlighted snippet and details."""
 
     def __init__(self, result: Dict[str, Any], parent=None):
         super().__init__(parent)
@@ -159,13 +139,7 @@ class ResultCard(QFrame):
 
 
 class ResultListWidget(QListWidget):
-    """
-    A QListWidget whose rows are ResultCards.
-
-    Cards contain word-wrapped snippets, so their height depends on the list
-    width. `refresh_card_heights()` recalculates every row height and is
-    called after results are added and whenever the list is resized.
-    """
+    """List of ResultCards whose row heights follow the list width."""
 
     open_item_requested = pyqtSignal(QListWidgetItem)
 

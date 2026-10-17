@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from smartlex.core.logger import setup_logger
+from smartlex.core.media_extractors import get_ocr_engine_id
 from smartlex.core.native_engine import SmartLexEngine, scan_directories
-from smartlex.core.text_extraction import extract_text_from_file
+from smartlex.core.text_extraction import extract_text_from_file, is_image_file
 
 logger = setup_logger(__name__)
 
@@ -23,16 +24,7 @@ except ImportError:
 
 
 class RealTimeFileWatcher:
-    """
-    Phase-2 Real-Time Filesystem Watcher with Event Debouncing.
-
-    Keeps `SmartLexEngine` 100% in sync while the application is running:
-    - When a supported file is created or edited -> extracts text and updates index.
-    - When a file is moved or renamed -> updates path in <1ms without re-extraction!
-    - When a file is deleted -> tombstones the document in O(1) time.
-    - Debounces rapid save events (e.g., editors writing a file multiple times
-      within 300ms) so each file is only indexed once after writing settles.
-    """
+    """Keeps the index in sync with file creations, edits, moves and deletions, debouncing rapid saves."""
 
     def __init__(
         self,
@@ -92,7 +84,7 @@ class RealTimeFileWatcher:
                             return False
         return True
 
-    # --- Event Recording API (Thread-Safe) ---
+    # Event recording; called from watchdog threads.
 
     def notify_created_or_modified(self, path: str) -> None:
         if not self.is_supported_file(path):
@@ -142,7 +134,7 @@ class RealTimeFileWatcher:
 
         ops_count = 0
 
-        # 1. Process Moves / Renames (Zero re-extraction!)
+        # 1. Moves / renames reuse the stored text
         for old_path, new_path in moves:
             stat_info = self.engine.catalog.stat_file(new_path)
             mtime_ns, fsize = stat_info if stat_info else (0, 0)
@@ -150,37 +142,20 @@ class RealTimeFileWatcher:
                 ops_count += 1
                 logger.info(f"[Watcher] Renamed/Moved in index: {old_path} -> {new_path}")
 
-        # 2. Process Deletions (O(1) Tombstones)
+        # 2. Deletions
         if deletes:
             self.engine.remove_documents(deletes)
             ops_count += len(deletes)
             logger.info(f"[Watcher] Removed {len(deletes)} deleted file(s) from index.")
 
-        # 3. Process Created / Modified Files
+        # 3. Created / modified files
         for path in ready_upserts:
-            if not os.path.exists(path):
-                continue
-            stat_info = self.engine.catalog.stat_file(path)
-            if stat_info is None:
-                continue
-            mtime_ns, file_size = stat_info
-
-            # Skip if already up-to-date in C++ index
-            if self.engine.native_index.is_up_to_date(path, mtime_ns, file_size):
-                continue
-
-            text = extract_text_from_file(path)
-            content_hash = self.engine.catalog.compute_file_hash(path)
-            self.engine.add_or_update_document(
-                path,
-                text,
-                mtime_ns=mtime_ns,
-                file_size=file_size,
-                content_hash=content_hash,
-                save_to_catalog=True,
-            )
-            ops_count += 1
-            logger.info(f"[Watcher] Indexed updated file: {path}")
+            try:
+                if self._index_file(path):
+                    ops_count += 1
+                    logger.info(f"[Watcher] Indexed updated file: {path}")
+            except Exception as e:
+                logger.error(f"[Watcher] Could not index {path}: {e}")
 
         if ops_count > 0:
             self.engine.save()
@@ -188,6 +163,29 @@ class RealTimeFileWatcher:
                 self.on_index_updated(self.engine)
 
         return ops_count
+
+    def _index_file(self, path: str) -> bool:
+        """Extracts and indexes one created or modified file. Returns False if skipped."""
+        stat_info = self.engine.catalog.stat_file(path)
+        if stat_info is None:
+            return False
+        mtime_ns, file_size = stat_info
+        if self.engine.native_index.is_up_to_date(path, mtime_ns, file_size):
+            return False
+
+        ocr_engine = get_ocr_engine_id() if is_image_file(path) else ""
+        text = extract_text_from_file(path)
+        content_hash = self.engine.catalog.compute_file_hash(path)
+        self.engine.add_or_update_document(
+            path,
+            text,
+            mtime_ns=mtime_ns,
+            file_size=file_size,
+            content_hash=content_hash,
+            save_to_catalog=True,
+            ocr_engine=ocr_engine,
+        )
+        return True
 
     def scan_for_delta_events(self) -> int:
         """
@@ -214,8 +212,6 @@ class RealTimeFileWatcher:
             self.notify_created_or_modified(mod_path)
 
         return self.flush_ready_events(force=True)
-
-    # --- Lifecycle Management ---
 
     def start(self) -> None:
         if self._worker_thread is not None and self._worker_thread.is_alive():

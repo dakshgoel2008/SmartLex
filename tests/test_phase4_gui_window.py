@@ -19,13 +19,7 @@ except ImportError:
 
 @unittest.skipUnless(PYQT5_AVAILABLE, "PyQt5 is not installed")
 class TestPhase4SearchWindow(unittest.TestCase):
-    """
-    Drives the real Phase 4 search window (offscreen) end-to-end:
-      1. Rich result cards with highlighted snippets
-      2. Filter pills narrowing results (and pill-only browsing)
-      3. Live indexing progress bar
-      4. Open / show-in-folder / copy-path actions and keyboard handling
-    """
+    """Drives the real search window offscreen: cards, filters, progress and file actions."""
 
     @classmethod
     def setUpClass(cls):
@@ -83,7 +77,6 @@ class TestPhase4SearchWindow(unittest.TestCase):
         QTest.mouseClick(button, Qt.LeftButton)
         self.app.processEvents()
 
-    # ------------------------------------------------------------------
 
     def test_results_are_rendered_as_cards_with_highlighted_snippets(self):
         self._search("forecast")

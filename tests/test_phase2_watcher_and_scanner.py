@@ -15,12 +15,7 @@ from smartlex.core.watcher import RealTimeFileWatcher
 class TestPhase2ZeroWaitAndWatcher(unittest.TestCase):
 
     def test_cpp20_parallel_scanner_priority_and_exclusions(self):
-        """
-        Verifies that the C++20 multi-threaded scanner:
-        1. Skips excluded/hidden directories (.git, node_modules).
-        2. Places high-priority user folders (Documents, Downloads, Desktop) first.
-        3. Orders newer files ahead of older files within the same tier.
-        """
+        """Scanner skips excluded folders and orders user folders and newer files first."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             docs_dir = root / "Documents"

@@ -17,13 +17,7 @@ def save_index(
     data: Union[SmartLexEngine, NativeIndex, dict],
     output_file: str = "index.slex",
 ) -> bool:
-    """
-    Saves the search index to disk.
-    - When `data` is a `SmartLexEngine` or `NativeIndex`, writes the compressed
-      binary `.slex` format.
-    - When `data` is a legacy dictionary and `output_file` ends with `.json`,
-      saves both the JSON and the upgraded `.slex` binary index.
-    """
+    """Saves the index as binary .slex; legacy dicts are also written as JSON when asked."""
     bin_path = _resolve_binary_path(output_file)
 
     if isinstance(data, SmartLexEngine):

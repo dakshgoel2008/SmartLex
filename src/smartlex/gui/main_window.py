@@ -89,6 +89,9 @@ class MyWidget(QWidget):
             self.file_watcher.stop()
         if self.indexing_thread is not None and self.indexing_thread.isRunning():
             self.indexing_thread.cancel()
+            # The thread stops at its next batch boundary; one OCR call can take a few
+            # seconds. Waiting avoids Qt aborting on a thread destroyed while running.
+            self.indexing_thread.wait(15000)
         super().closeEvent(event)
 
     def initUI(self):
@@ -448,7 +451,8 @@ class MyWidget(QWidget):
         files_done, files_total = progress
         self.index_progress.setRange(0, files_total)
         self.index_progress.setValue(files_done)
-        self.index_progress.setFormat(f"Indexing contents: {files_done}/{files_total} files (%p%)")
+        label = message.split(" (")[0].rstrip(".")
+        self.index_progress.setFormat(f"{label} (%p%)")
 
     def _on_indexing_thread_stopped(self):
         self.sync_button.setEnabled(True)
@@ -518,7 +522,7 @@ class MyWidget(QWidget):
         self._set_status("Ready", "idle")
         self.search_input.setFocus()
 
-    # --- Result actions: open, show in folder, copy path ---
+    # Result actions: open, show in folder, copy path
 
     def open_file(self, item):
         file_path = item.data(Qt.UserRole) if item is not None else None

@@ -16,15 +16,7 @@ from smartlex.core.processor import process_files_parallel
 
 
 class TestPhase3Multimodal(unittest.TestCase):
-    """
-    End-to-end verification of Phase 3:
-      1. Office & E-Book Extractors (.xlsx, .pptx, .epub, .odt)
-      2. Image Extractor (Resolution, PNG text chunks, EXIF tags, Pluggable OCR)
-      3. Audio Extractor (WAV RIFF/INFO, MP3 ID3v2/v1, LRC/SRT transcripts, Pluggable ASR)
-      4. Video Extractor (MP4 atoms, SRT/VTT sidecar subtitles with [MM:SS] timestamps)
-      5. Location-Aware Snippets ([02:30], [Slide 2], [Sheet: Q4 Revenue], [Chapter 1])
-      6. C++20 Semantic Category Filters (type:image, type:audio, type:video, type:sheet, type:slide)
-    """
+    """End-to-end tests for office, image, audio and video extraction and type: filters."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -41,9 +33,6 @@ class TestPhase3Multimodal(unittest.TestCase):
         register_asr_backend(None)
         self.temp_dir.cleanup()
 
-    # ------------------------------------------------------------------
-    # Helpers to create real multimodal files on disk
-    # ------------------------------------------------------------------
 
     def _create_sample_xlsx(self, path: Path) -> None:
         workbook_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -197,9 +186,6 @@ Obstacle avoidance trajectory converged using reinforcement learning.
 """
         srt_path.write_text(srt_content, encoding="utf-8")
 
-    # ------------------------------------------------------------------
-    # Test Cases
-    # ------------------------------------------------------------------
 
     def test_1_office_and_ebook_extractors(self):
         """Verifies .xlsx, .pptx (with speaker notes), and .epub indexing & location markers."""

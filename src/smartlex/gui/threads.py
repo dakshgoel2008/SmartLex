@@ -61,6 +61,7 @@ class IndexingThread(QThread):
                 progress_callback=self._emit_progress,
                 engine=self.engine,
                 on_tier_ready=self._on_tier_ready,
+                should_cancel=lambda: self._is_cancelled,
             )
 
             if self._is_cancelled:

@@ -3,12 +3,7 @@ from PyQt5.QtWidgets import QCompleter
 
 
 class CustomCompleter(QCompleter):
-    """
-    Custom completer that completes individual words in a multi-word search query.
-    
-    Instead of replacing the entire line, this completer only replaces the current
-    word being typed, allowing for natural multi-keyword searches.
-    """
+    """Completes only the word being typed, so multi-word queries keep their other words."""
 
     def __init__(self, words, parent=None):
         """
@@ -41,21 +36,9 @@ class CustomCompleter(QCompleter):
 
 
 class SearchHistoryCompleter(QCompleter):
-    """
-    Completer for search history that shows previous complete queries.
-    
-    This completer can be used alongside CustomCompleter to provide
-    full query history suggestions.
-    """
+    """Suggests previous complete queries."""
 
     def __init__(self, history, parent=None):
-        """
-        Initialize the search history completer.
-        
-        Args:
-            history: List of previous search queries
-            parent: Parent widget (optional)
-        """
         super().__init__(history, parent)
         self.history = list(reversed(history))  # Most recent first
         self.setCaseSensitivity(Qt.CaseInsensitive)
@@ -63,12 +46,7 @@ class SearchHistoryCompleter(QCompleter):
         self.setMaxVisibleItems(8)
 
     def update_history(self, new_query):
-        """
-        Add a new query to the history.
-        
-        Args:
-            new_query: The search query to add to history
-        """
+        """Adds a query to the front of the history."""
         if new_query and new_query not in self.history:
             self.history.insert(0, new_query)
             # Keep only last 100 queries
@@ -78,10 +56,5 @@ class SearchHistoryCompleter(QCompleter):
             self.setModel(QStringListModel(self.history))
 
     def get_history(self):
-        """
-        Get the current search history.
-        
-        Returns:
-            List of search queries in chronological order (most recent first)
-        """
+        """Returns the history, most recent first."""
         return self.history.copy()
