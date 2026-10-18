@@ -89,7 +89,6 @@ smartlex-cli --dir ~/Documents                    # index a folder, then search 
 smartlex-cli --dir ~/Documents --query "tax 2024" # one search, then exit
 ```
 
-In interactive mode, type `:auto <prefix>` for word suggestions, `:status` for index size and `:q` to quit.
 
 ## Supported files
 
@@ -104,12 +103,6 @@ In interactive mode, type `:auto <prefix>` for word suggestions, `:status` for i
 | Video | `.mp4` `.mkv` `.mov` `.webm` `.avi` | Metadata and subtitles, with timestamps in results |
 | Subtitles | `.srt` `.vtt` `.lrc` | Timestamped text |
 
-Optional extras:
-
-- **Speech-to-text** for audio and video without subtitles: install [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with `pipx inject smartlex-search faster-whisper`. It downloads a speech model the first time it runs.
-- **Embedded subtitle tracks** in videos are read when `ffmpeg` is on your PATH.
-- **Scanned PDFs** with no text layer are OCR'd when Poppler's `pdftoppm` is on your PATH.
-
 ## How it works
 
 1. **Scan.** A multi-threaded C++ scanner walks your folders, skipping system, hidden and build folders such as `Windows`, `node_modules` and `.git`.
@@ -118,56 +111,21 @@ Optional extras:
 4. **Remember.** A local SQLite catalog stores each file's size, modification time, content hash and extracted text. Unchanged files are skipped, moved files are recognised by their content, and result snippets come from the catalog instead of re-opening files.
 5. **Watch.** A file watcher applies changes to the index while the app runs.
 
-## Settings and data
+## Performance
 
-SmartLex keeps its index, catalog and logs in `~/.smartlex` (`C:\Users\<you>\.smartlex` on Windows). Delete that folder to start fresh.
+Measured on a laptop with an Intel Core i5-1235U and 16 GB of RAM, using 49,072 distinct real files (690 MB of code, documentation, HTML and text) and 800 mixed queries: single and multiple words, exact phrases, typos, `ext:` filters and exclusions.
 
-To change what is indexed, create `~/.smartlex/config.json`. Any key you leave out keeps its default:
+| | Result |
+|---|---|
+| First-time indexing | 35 s for 49,072 files (about 1,400 files per second) |
+| Next launch, nothing changed | 0.6 s to load the index, 0.3 s to check every file |
+| Search, core engine | 8 ms median, 77 ms for 95% of queries |
+| Search, full results with snippets | 42 ms median, 132 ms for 95% of queries |
+| Exact phrase accuracy | 953 of 953 phrases copied from random files found their file; 1,161 of 1,161 phrase results contained the phrase |
+| Index size on disk | 269 MB index and 198 MB catalog for 690 MB of files |
 
-```json
-{
-  "SUPPORTED_FORMATS": [".pdf", ".docx", ".xlsx", ".md", ".png", ".jpg"],
-  "NUM_PROCESSES": 4
-}
-```
+Scanned PDFs and images take longer because their text has to be read with OCR, at about 1.6 s per image.
 
-## Troubleshooting
-
-- **`smartlex: command not found`.** Run `pipx ensurepath` and open a new terminal.
-- **The first index takes a while.** It depends on how many files you have, and OCR adds a second or two per image. This only happens once; you can search while it runs.
-- **macOS asks for access to Desktop, Documents or Downloads.** Allow it to search those folders. If you decline, they are skipped.
-- **Linux: "Could not load the Qt platform plugin xcb".** Install Qt's system libraries, for example `sudo apt install libxcb-xinerama0 libxkbcommon-x11-0` on Ubuntu or Debian.
-- **Linux on ARM and Windows on ARM** are not supported yet, because PyQt5 or the OCR libraries are not available there.
-
-## Development
-
-```bash
-git clone https://github.com/dakshgoel2008/SmartLex.git
-cd SmartLex
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .
-python -m unittest discover -s tests
-```
-
-Building from source needs a C++20 compiler (GCC 10+, Clang 14+ or Visual Studio 2022). Run the app from the checkout with `python run.py`.
-
-```text
-SmartLex/
-├── cpp/                  C++20 core: tokenizer, inverted index, parallel scanner, Python bindings
-├── src/smartlex/
-│   ├── core/             Text extraction, OCR, catalog, indexing pipeline, file watcher
-│   ├── gui/              PyQt5 window and widgets
-│   ├── main.py           Desktop app entry point
-│   └── cli.py            Terminal mode
-├── tests/                Unit and end-to-end tests
-└── .github/workflows/    CI and release automation
-```
-
-Every push runs the tests on Windows, macOS and Linux. To publish a release, bump `version` in `pyproject.toml`, commit, then push a matching tag (`git tag v2.1.1 && git push origin v2.1.1`). The release workflow builds and tests packages for every platform and publishes to PyPI only if all of them pass.
-
-## Reference
-
-- [Base paper](https://drive.google.com/file/d/10f3bUmaTRzAZ2jOq6oWFu0ilP6Q6dyJx/view?usp=sharing)
 
 ## License
 
