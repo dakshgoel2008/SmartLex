@@ -40,18 +40,31 @@ class CatalogDB:
                     content_hash TEXT NOT NULL,
                     compressed_text BLOB,
                     updated_at REAL NOT NULL,
-                    ocr_engine TEXT NOT NULL DEFAULT ''
+                    ocr_engine TEXT NOT NULL DEFAULT '',
+                    asr_engine TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
-            # Catalogs created before OCR tracking existed lack this column.
+            # Catalogs created by older versions lack these columns.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
-            if "ocr_engine" not in columns:
-                conn.execute(
-                    "ALTER TABLE documents ADD COLUMN ocr_engine TEXT NOT NULL DEFAULT ''"
-                )
+            for column in ("ocr_engine", "asr_engine"):
+                if column not in columns:
+                    conn.execute(
+                        f"ALTER TABLE documents ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                    )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at)"
+            )
+            # Keyed by content so copies and re-saved files are never transcribed twice.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS transcripts (
+                    content_hash TEXT NOT NULL,
+                    asr_engine TEXT NOT NULL,
+                    compressed_text BLOB,
+                    PRIMARY KEY (content_hash, asr_engine)
+                )
+                """
             )
 
     @staticmethod
@@ -195,6 +208,12 @@ class CatalogDB:
         return self._decompress(blob)
 
     @staticmethod
+    def _compress(text: str) -> bytes:
+        if not text:
+            return b""
+        return zlib.compress(text.encode("utf-8", errors="ignore"), level=6)
+
+    @staticmethod
     def _decompress(blob) -> str:
         if not blob:
             return ""
@@ -204,37 +223,38 @@ class CatalogDB:
             return ""
 
     def upsert_documents_batch(
-        self, records: List[Tuple[str, int, int, str, str]], ocr_engine: str = ""
+        self,
+        records: List[Tuple[str, int, int, str, str]],
+        ocr_engine: str = "",
+        asr_engine: str = "",
     ) -> None:
         """Saves (path, mtime_ns, file_size, content_hash, raw_text) records.
-        `ocr_engine` names the OCR backend that read them ("" = not OCR'd yet).
+        `ocr_engine` and `asr_engine` name the backends that read them ("" = not read yet).
         """
         if not records:
             return
 
         now = time.time()
-        rows = []
-        for path, mtime_ns, file_size, content_hash, raw_text in records:
-            compressed = (
-                zlib.compress(raw_text.encode("utf-8", errors="ignore"), level=6)
-                if raw_text
-                else b""
-            )
-            rows.append((path, mtime_ns, file_size, content_hash, compressed, now, ocr_engine))
+        rows = [
+            (path, mtime_ns, file_size, content_hash, self._compress(raw_text), now, ocr_engine, asr_engine)
+            for path, mtime_ns, file_size, content_hash, raw_text in records
+        ]
 
         with self._connect() as conn:
             conn.executemany(
                 """
                 INSERT INTO documents
-                    (path, mtime_ns, file_size, content_hash, compressed_text, updated_at, ocr_engine)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (path, mtime_ns, file_size, content_hash, compressed_text, updated_at,
+                     ocr_engine, asr_engine)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     mtime_ns = excluded.mtime_ns,
                     file_size = excluded.file_size,
                     content_hash = excluded.content_hash,
                     compressed_text = excluded.compressed_text,
                     updated_at = excluded.updated_at,
-                    ocr_engine = excluded.ocr_engine
+                    ocr_engine = excluded.ocr_engine,
+                    asr_engine = excluded.asr_engine
                 """,
                 rows,
             )
@@ -282,6 +302,30 @@ class CatalogDB:
         """Returns {path: ocr_engine} for every cataloged file."""
         with self._connect() as conn:
             return dict(conn.execute("SELECT path, ocr_engine FROM documents").fetchall())
+
+    def get_asr_engines(self) -> Dict[str, str]:
+        """Returns {path: asr_engine} for every cataloged file."""
+        with self._connect() as conn:
+            return dict(conn.execute("SELECT path, asr_engine FROM documents").fetchall())
+
+    def get_transcript(self, content_hash: str, asr_engine: str) -> Optional[str]:
+        """Returns the stored transcript, or None if this content was never transcribed.
+        An empty string means it was transcribed and holds no speech.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT compressed_text FROM transcripts WHERE content_hash = ? AND asr_engine = ?",
+                (content_hash, asr_engine),
+            ).fetchone()
+        return self._decompress(row[0]) if row else None
+
+    def save_transcript(self, content_hash: str, asr_engine: str, text: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO transcripts (content_hash, asr_engine, compressed_text) "
+                "VALUES (?, ?, ?)",
+                (content_hash, asr_engine, self._compress(text)),
+            )
 
     def generate_snippet(
         self, path: str, matched_words: List[str], max_length: int = 160

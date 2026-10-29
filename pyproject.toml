@@ -52,7 +52,7 @@ where = ["src"]
 build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* *-win32 *-manylinux_i686 cp314-macosx_x86_64"
 # Qt-free tests; the GUI tests run in ci.yml on real runners.
-test-command = "python -m unittest tests.test_phase1_engine tests.test_phase2_watcher_and_scanner tests.test_phase3_multimodal tests.test_phase4_gui_helpers tests.test_phase5_image_ocr"
+test-command = "python -m unittest tests.test_phase1_engine tests.test_phase2_watcher_and_scanner tests.test_phase3_multimodal tests.test_phase4_gui_helpers tests.test_phase5_image_ocr tests.test_phase6_audio"
 test-sources = ["tests"]
 
 [tool.cibuildwheel.linux]

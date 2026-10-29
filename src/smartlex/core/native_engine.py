@@ -79,6 +79,7 @@ class SmartLexEngine:
         content_hash: str = "",
         save_to_catalog: bool = True,
         ocr_engine: str = "",
+        asr_engine: str = "",
     ) -> int:
         """Indexes a single document in C++ and optionally persists text to SQLite."""
         if mtime_ns == 0 and file_size == 0:
@@ -93,7 +94,9 @@ class SmartLexEngine:
             if not content_hash:
                 content_hash = self.catalog.compute_file_hash(path)
             self.catalog.upsert_documents_batch(
-                [(path, mtime_ns, file_size, content_hash, raw_text)], ocr_engine=ocr_engine
+                [(path, mtime_ns, file_size, content_hash, raw_text)],
+                ocr_engine=ocr_engine,
+                asr_engine=asr_engine,
             )
         return doc_id
 
@@ -121,10 +124,13 @@ class SmartLexEngine:
         return True
 
     def add_documents_batch(
-        self, records: List[Tuple[str, int, int, str, str]], ocr_engine: str = ""
+        self,
+        records: List[Tuple[str, int, int, str, str]],
+        ocr_engine: str = "",
+        asr_engine: str = "",
     ) -> int:
         """Indexes (path, mtime_ns, file_size, content_hash, raw_text) records and saves them.
-        `ocr_engine` names the OCR backend that read them ("" = not OCR'd).
+        `ocr_engine` and `asr_engine` name the backends that read them ("" = not read yet).
         """
         if not records:
             return 0
@@ -136,7 +142,7 @@ class SmartLexEngine:
         for path, mtime_ns, file_size, _content_hash, raw_text in cleaned:
             self.native_index.add_document(path, raw_text, mtime_ns, file_size)
 
-        self.catalog.upsert_documents_batch(cleaned, ocr_engine=ocr_engine)
+        self.catalog.upsert_documents_batch(cleaned, ocr_engine=ocr_engine, asr_engine=asr_engine)
         return len(cleaned)
 
     def remove_documents(self, paths: Iterable[str]) -> int:
