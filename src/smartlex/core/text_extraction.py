@@ -245,9 +245,11 @@ def is_image_file(file_path: str) -> bool:
     return Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
 
 
-def extract_text_from_file(file_path: str, include_ocr: bool = True) -> str:
+def extract_text_from_file(
+    file_path: str, include_ocr: bool = True, include_asr: bool = True
+) -> str:
     """Extracts searchable text from any supported file type.
-    With include_ocr=False, images return only their metadata.
+    Without OCR or ASR, images and audio/video return only their metadata and sidecars.
     """
     ext = Path(file_path).suffix.lower()
     if ext == ".pdf":
@@ -265,9 +267,9 @@ def extract_text_from_file(file_path: str, include_ocr: bool = True) -> str:
     if ext in IMAGE_EXTENSIONS:
         return extract_text_image(file_path, include_ocr=include_ocr)
     if ext in AUDIO_EXTENSIONS:
-        return extract_text_audio(file_path)
+        return extract_text_audio(file_path, include_asr=include_asr)
     if ext in VIDEO_EXTENSIONS:
-        return extract_text_video(file_path)
+        return extract_text_video(file_path, include_asr=include_asr)
     if ext in SUBTITLE_EXTENSIONS:
         try:
             raw = Path(file_path).read_text(encoding="utf-8", errors="ignore")

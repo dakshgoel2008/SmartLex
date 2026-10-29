@@ -232,10 +232,10 @@ class TestUnusualFilesNeverCrash(ImageTestCase):
 
         original = processor.extract_text_from_file
 
-        def flaky_extract(path, include_ocr=True):
+        def flaky_extract(path, include_ocr=True, include_asr=True):
             if path == str(bad):
                 raise MemoryError("simulated")
-            return original(path, include_ocr=include_ocr)
+            return original(path, include_ocr=include_ocr, include_asr=include_asr)
 
         with mock.patch.object(processor, "extract_text_from_file", flaky_extract):
             process_all_batches([self.write_batch_file([good, bad])], engine=self.engine)

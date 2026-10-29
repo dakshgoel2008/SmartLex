@@ -32,7 +32,9 @@ def extract_keywords_from_file(file_path: str) -> List[str]:
     return extract_keywords(text)
 
 
-def _extract_file_record(path: str, include_ocr: bool = True) -> Optional[Record]:
+def _extract_file_record(
+    path: str, include_ocr: bool = True, include_asr: bool = True
+) -> Optional[Record]:
     """Extracts one file. Returns None if it is gone; on failure returns empty text
     so the file stays searchable by name and the run continues.
     """
@@ -42,7 +44,7 @@ def _extract_file_record(path: str, include_ocr: bool = True) -> Optional[Record
     mtime_ns, file_size = stat_info
 
     try:
-        text = extract_text_from_file(path, include_ocr=include_ocr)
+        text = extract_text_from_file(path, include_ocr=include_ocr, include_asr=include_asr)
     except Exception as e:
         logger.error(f"Could not extract text from {path}: {e}")
         text = ""
@@ -230,7 +232,10 @@ def process_all_batches(
                 records = [
                     record
                     for record in executor.map(
-                        lambda path: _extract_file_record(path, include_ocr=False), chunk
+                        lambda path: _extract_file_record(
+                            path, include_ocr=False, include_asr=False
+                        ),
+                        chunk,
                     )
                     if record is not None
                 ]

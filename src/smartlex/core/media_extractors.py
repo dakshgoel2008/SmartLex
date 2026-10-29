@@ -1140,8 +1140,8 @@ def run_audio_asr(file_path: str) -> str:
     return ""
 
 
-def extract_text_audio(file_path: str) -> str:
-    """Audio tags and sidecar transcripts, plus speech-to-text when no transcript exists."""
+def extract_text_audio(file_path: str, include_asr: bool = True) -> str:
+    """Audio tags and sidecar transcripts, plus speech-to-text when `include_asr`."""
     ext = Path(file_path).suffix.lower()
     parts: List[str] = []
 
@@ -1173,16 +1173,16 @@ def extract_text_audio(file_path: str) -> str:
     if sidecar_subs:
         parts.append(sidecar_subs)
 
-    # Stage B: Speech-to-Text ASR
-    asr_text = run_audio_asr(file_path)
-    if asr_text:
-        parts.append(asr_text)
+    if include_asr:
+        asr_text = run_audio_asr(file_path)
+        if asr_text:
+            parts.append(asr_text)
 
     return "\n".join(parts)
 
 
-def extract_text_video(file_path: str) -> str:
-    """Container metadata and subtitles, plus speech-to-text when no subtitles exist."""
+def extract_text_video(file_path: str, include_asr: bool = True) -> str:
+    """Container metadata and subtitles, plus speech-to-text when `include_asr`."""
     ext = Path(file_path).suffix.lower()
     parts: List[str] = [f"[Video {ext.lstrip('.').upper()}]"]
 
@@ -1215,10 +1215,10 @@ def extract_text_video(file_path: str) -> str:
     if sidecar_subs:
         parts.append(sidecar_subs)
 
-    # 4. Stage B: Speech-to-Text ASR fallback
-    asr_text = run_audio_asr(file_path)
-    if asr_text:
-        parts.append(asr_text)
+    if include_asr:
+        asr_text = run_audio_asr(file_path)
+        if asr_text:
+            parts.append(asr_text)
 
     return "\n".join(parts)
 

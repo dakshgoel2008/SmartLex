@@ -174,7 +174,8 @@ class RealTimeFileWatcher:
             return False
 
         ocr_engine = get_ocr_engine_id() if is_image_file(path) else ""
-        text = extract_text_from_file(path)
+        # Transcription can take minutes, so it is left to the background speech pass.
+        text = extract_text_from_file(path, include_asr=False)
         content_hash = self.engine.catalog.compute_file_hash(path)
         self.engine.add_or_update_document(
             path,
