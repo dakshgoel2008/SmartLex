@@ -65,6 +65,8 @@ DEFAULT_CONFIG = {
     "INDEX_FILE": "index.slex",
     "CATALOG_FILE": "smartlex_catalog.db",
     "AUTOCOMPLETE_FILE": "autocomplete_words.json",
+    # Whisper model for speech-to-text: "tiny", "base", "small", "medium" or "large-v3-turbo"
+    "ASR_MODEL": "small",
 }
 
 

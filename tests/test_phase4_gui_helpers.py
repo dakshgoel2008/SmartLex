@@ -113,6 +113,7 @@ class TestPhase4GuiHelpers(unittest.TestCase):
             (64, 250),
         )
         self.assertEqual(parse_indexing_progress("Indexing contents: 300/250 files"), (250, 250))
+        self.assertEqual(parse_indexing_progress("Transcribing audio: 3/12 files..."), (3, 12))
         self.assertIsNone(parse_indexing_progress("Indexing contents: 0/0 files"))
         self.assertIsNone(parse_indexing_progress("Scanning /home with C++20 parallel scanner..."))
         self.assertIsNone(parse_indexing_progress("Saving compressed binary index to disk..."))

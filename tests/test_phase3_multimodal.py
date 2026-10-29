@@ -27,6 +27,8 @@ class TestPhase3Multimodal(unittest.TestCase):
             index_file=self.index_path,
             catalog_file=self.catalog_path,
         )
+        # Keeps tests from loading a real speech model when one is installed.
+        register_asr_backend(lambda path: "")
 
     def tearDown(self):
         register_ocr_backend(None)

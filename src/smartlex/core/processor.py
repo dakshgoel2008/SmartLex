@@ -9,12 +9,15 @@ from smartlex.core.keyword_extraction import extract_keywords
 from smartlex.core.logger import setup_logger
 from smartlex.core.media_extractors import (
     combine_image_text,
+    find_and_parse_sidecar_subtitles,
+    get_asr_engine_id,
     get_ocr_engine_id,
     read_image_metadata,
+    run_audio_asr,
     run_image_ocr,
 )
 from smartlex.core.native_engine import SmartLexEngine
-from smartlex.core.text_extraction import extract_text_from_file, is_image_file
+from smartlex.core.text_extraction import extract_text_from_file, is_image_file, is_media_file
 
 logger = setup_logger(__name__)
 
@@ -171,6 +174,97 @@ def run_ocr_pass(
     return processed
 
 
+def _transcribe_media_record(
+    engine: SmartLexEngine,
+    path: str,
+    asr_engine: str,
+    should_cancel: Optional[Callable[[], bool]],
+) -> Optional[Record]:
+    """Builds the full record (tags, subtitles and transcript) for one audio or video file.
+    Returns None if the file is gone or the transcription did not finish.
+    """
+    stat_info = CatalogDB.stat_file(path)
+    if stat_info is None:
+        return None
+    mtime_ns, file_size = stat_info
+    content_hash = CatalogDB.compute_file_hash(path)
+    try:
+        text = extract_text_from_file(path, include_asr=False)
+    except Exception as e:
+        logger.error(f"Could not extract text from {path}: {e}")
+        text = ""
+
+    # Subtitles or lyrics next to the file are more accurate than a transcript.
+    if find_and_parse_sidecar_subtitles(path):
+        return (path, mtime_ns, file_size, content_hash, text)
+
+    transcript = engine.catalog.get_transcript(content_hash, asr_engine) if content_hash else None
+    if transcript is None:
+        transcript = run_audio_asr(path, should_cancel)
+        if transcript is None or get_asr_engine_id() != asr_engine:
+            return None
+        if content_hash:
+            engine.catalog.save_transcript(content_hash, asr_engine, transcript)
+
+    text = "\n".join(part for part in (text, transcript) if part)
+    return (path, mtime_ns, file_size, content_hash, text)
+
+
+def run_asr_pass(
+    engine: SmartLexEngine,
+    paths: List[str],
+    progress_callback: Optional[Callable[[str], None]] = None,
+    on_tier_ready: Optional[Callable[[SmartLexEngine], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> int:
+    """Transcribes every audio and video file in `paths` not yet read by the current engine.
+    Returns the count.
+    """
+    asr_engine = get_asr_engine_id()
+    if not asr_engine:
+        return 0
+
+    def cancelled() -> bool:
+        return should_cancel is not None and should_cancel()
+
+    stored_engines = engine.catalog.get_asr_engines()
+    pending = [
+        path
+        for path in paths
+        if is_media_file(path) and path in stored_engines and stored_engines[path] != asr_engine
+    ]
+    if not pending:
+        return 0
+
+    # Smallest files first, so many recordings become searchable early.
+    pending.sort(key=lambda path: (CatalogDB.stat_file(path) or (0, 0))[1])
+
+    logger.info(f"Transcribing {len(pending)} audio/video file(s) with {asr_engine}.")
+    if progress_callback:
+        progress_callback(f"Transcribing audio: 0/{len(pending)} files...")
+    processed = 0
+
+    for path in pending:
+        if cancelled():
+            break
+        record = _transcribe_media_record(engine, path, asr_engine, should_cancel)
+        if get_asr_engine_id() != asr_engine:
+            logger.warning("Speech engine changed during indexing; remaining files are left for the next sync.")
+            break
+        if record is None and cancelled():
+            break
+
+        processed += 1
+        if record is not None:
+            engine.add_documents_batch([record], asr_engine=asr_engine)
+        if progress_callback:
+            progress_callback(f"Transcribing audio: {processed}/{len(pending)} files...")
+        if on_tier_ready:
+            on_tier_ready(engine)
+
+    return processed
+
+
 def process_all_batches(
     batch_files: List[str],
     top_n: int = 150,
@@ -179,7 +273,7 @@ def process_all_batches(
     on_tier_ready=None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> SmartLexEngine:
-    """Syncs the index with the listed files: names first, then contents, then image OCR.
+    """Syncs the index with the listed files: names first, then contents, image OCR and speech.
     `should_cancel` is polled between batches.
     """
     cfg = load_config()
@@ -258,10 +352,12 @@ def process_all_batches(
         if on_tier_ready:
             on_tier_ready(engine)
 
+    deleted_set = set(deleted)
+    current_paths = [path for path in all_paths if path not in deleted_set]
     if not cancelled():
-        deleted_set = set(deleted)
-        current_paths = [path for path in all_paths if path not in deleted_set]
         run_ocr_pass(engine, current_paths, progress_callback, on_tier_ready, should_cancel)
+    if not cancelled():
+        run_asr_pass(engine, current_paths, progress_callback, on_tier_ready, should_cancel)
 
     return engine
 
@@ -271,7 +367,7 @@ def process_files_parallel(
     engine: Optional[SmartLexEngine] = None,
 ) -> SmartLexEngine:
     """
-    Indexes a list of file paths in parallel, including OCR of images, and
+    Indexes a list of file paths in parallel, including OCR and speech-to-text, and
     returns once everything is searchable.
     """
     cfg = load_config()
@@ -285,5 +381,7 @@ def process_files_parallel(
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         records = [rec for rec in executor.map(_extract_file_record, file_paths) if rec is not None]
 
-    engine.add_documents_batch(records, ocr_engine=get_ocr_engine_id())
+    engine.add_documents_batch(
+        records, ocr_engine=get_ocr_engine_id(), asr_engine=get_asr_engine_id()
+    )
     return engine

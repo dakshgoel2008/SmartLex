@@ -189,8 +189,9 @@ def highlight_snippet_html(snippet: str, matched_words: Iterable[str]) -> str:
 # Matches the progress messages emitted by `processor.process_all_batches()`:
 #   "Indexing contents: 64/250 files (12 unchanged skipped)..."
 #   "Reading text in images: 8/40 images..."
+#   "Transcribing audio: 3/12 files..."
 _INDEXING_PROGRESS_PATTERN = re.compile(
-    r"^(?:Indexing contents|Reading text in images): (\d+)/(\d+) (?:files|images)"
+    r"^(?:Indexing contents|Reading text in images|Transcribing audio): (\d+)/(\d+) (?:files|images)"
 )
 
 

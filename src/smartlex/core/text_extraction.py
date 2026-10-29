@@ -245,6 +245,11 @@ def is_image_file(file_path: str) -> bool:
     return Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
 
 
+def is_media_file(file_path: str) -> bool:
+    ext = Path(file_path).suffix.lower()
+    return ext in AUDIO_EXTENSIONS or ext in VIDEO_EXTENSIONS
+
+
 def extract_text_from_file(
     file_path: str, include_ocr: bool = True, include_asr: bool = True
 ) -> str:

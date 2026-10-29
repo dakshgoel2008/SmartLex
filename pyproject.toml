@@ -36,6 +36,10 @@ dependencies = [
     "onnxruntime>=1.17.0",
 ]
 
+[project.optional-dependencies]
+# faster-whisper 1.2.1 passes an argument that av 19 removed, so every decode would fail.
+audio = ["faster-whisper>=1.1.0", "av<19"]
+
 [project.urls]
 Homepage = "https://github.com/dakshgoel2008/SmartLex"
 Issues = "https://github.com/dakshgoel2008/SmartLex/issues"

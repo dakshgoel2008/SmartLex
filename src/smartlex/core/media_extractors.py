@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from smartlex.core.config import load_config
 from smartlex.core.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -1088,60 +1089,114 @@ def _parse_vorbis_comments(file_path: str) -> List[str]:
     return tags
 
 
-def run_audio_asr(file_path: str) -> str:
-    """Transcribes speech with the first available backend: registered, faster_whisper,
-    openai-whisper, then the whisper command. Returns "" if none works.
+# Speech-to-text runs as a separate background pass after OCR (see processor.run_asr_pass).
+# Larger batches are no faster on CPU and make cancel checks further apart.
+ASR_BATCH_SIZE = 2
+
+_whisper_pipeline = None
+_whisper_model_name = ""
+_whisper_failed = False
+_whisper_lock = threading.Lock()
+
+
+def _asr_model_name() -> str:
+    return load_config()["ASR_MODEL"]
+
+
+def _installed_faster_whisper_version() -> str:
+    """Version of the installed `faster-whisper` package, or "" if it is not installed."""
+    if importlib.util.find_spec("faster_whisper") is None:
+        return ""
+    try:
+        return importlib.metadata.version("faster-whisper")
+    except importlib.metadata.PackageNotFoundError:
+        return ""
+
+
+def get_asr_engine_id() -> str:
+    """Names the speech-to-text backend run_audio_asr will use, or "" if none.
+    Stored per file in the catalog, so recordings are transcribed again when it changes.
     """
     if _custom_asr_backend is not None:
-        try:
-            res = _custom_asr_backend(file_path)
-            if res and res.strip():
-                return res.strip()
-        except Exception as e:
-            logger.error(f"Custom ASR backend failed on {file_path}: {e}")
-
-    # Option 2: faster-whisper
-    try:
-        from faster_whisper import WhisperModel  # type: ignore
-
-        model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
-        segments, _ = model.transcribe(file_path, beam_size=1)
-        lines = [
-            f"{format_timestamp(seg.start)} {seg.text.strip()}"
-            for seg in segments
-            if seg.text and seg.text.strip()
-        ]
-        if lines:
-            return "\n".join(lines)
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.debug(f"faster-whisper error on {file_path}: {e}")
-
-    # Option 3: openai-whisper
-    try:
-        import whisper  # type: ignore
-
-        model = whisper.load_model("tiny.en")
-        result = model.transcribe(file_path, fp16=False)
-        segments = result.get("segments", [])
-        lines = [
-            f"{format_timestamp(seg['start'])} {seg['text'].strip()}"
-            for seg in segments
-            if seg.get("text", "").strip()
-        ]
-        if lines:
-            return "\n".join(lines)
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.debug(f"whisper error on {file_path}: {e}")
-
+        return "custom"
+    version = _installed_faster_whisper_version()
+    if version and not _whisper_failed:
+        return f"faster-whisper-{version}-{_asr_model_name()}"
     return ""
 
 
+def _get_whisper_pipeline(model_name: str):
+    """Loads the shared model on first use. Call with _whisper_lock held."""
+    global _whisper_pipeline, _whisper_model_name, _whisper_failed
+    if _whisper_failed:
+        return None
+    if _whisper_pipeline is None or _whisper_model_name != model_name:
+        try:
+            from faster_whisper import BatchedInferencePipeline, WhisperModel  # type: ignore
+
+            # One thread per physical core; hyper-threads add little to this workload.
+            model = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=max(1, (os.cpu_count() or 2) // 2),
+            )
+            _whisper_pipeline = BatchedInferencePipeline(model=model)
+            _whisper_model_name = model_name
+        except Exception as e:
+            _whisper_pipeline = None
+            _whisper_failed = True
+            logger.warning(f"Speech model {model_name} could not be loaded, audio is not transcribed: {e}")
+    return _whisper_pipeline
+
+
+def _transcribe_with_whisper(
+    file_path: str, should_cancel: Optional[Callable[[], bool]]
+) -> Optional[str]:
+    with _whisper_lock:
+        pipeline = _get_whisper_pipeline(_asr_model_name())
+        if pipeline is None:
+            return None
+        # Silence and music are skipped by the built-in voice activity filter.
+        # Timestamps inside each 30 s chunk place results about every 10 s instead of 30 s.
+        segments, _info = pipeline.transcribe(
+            file_path, batch_size=ASR_BATCH_SIZE, without_timestamps=False
+        )
+        lines = []
+        for segment in segments:
+            if should_cancel is not None and should_cancel():
+                return None
+            text = segment.text.strip()
+            if text:
+                lines.append(f"{format_timestamp(segment.start)} {text}")
+    return "\n".join(lines)
+
+
+def run_audio_asr(
+    file_path: str, should_cancel: Optional[Callable[[], bool]] = None
+) -> Optional[str]:
+    """Transcribes speech as "[MM:SS] text" lines; "" means the file holds no speech.
+    Returns None when it failed or `should_cancel` stopped it, so it is retried later.
+    """
+    if _custom_asr_backend is not None:
+        try:
+            result = _custom_asr_backend(file_path)
+            return result.strip() if result else ""
+        except Exception as e:
+            logger.error(f"Custom ASR backend failed on {file_path}: {e}")
+            return None
+
+    if not get_asr_engine_id():
+        return None
+    try:
+        return _transcribe_with_whisper(file_path, should_cancel)
+    except Exception as e:
+        logger.warning(f"Could not transcribe {file_path}: {e}")
+        return None
+
+
 def extract_text_audio(file_path: str, include_asr: bool = True) -> str:
-    """Audio tags and sidecar transcripts, plus speech-to-text when `include_asr`."""
+    """Audio tags and sidecar transcripts, or speech-to-text when `include_asr` and there are none."""
     ext = Path(file_path).suffix.lower()
     parts: List[str] = []
 
@@ -1173,7 +1228,7 @@ def extract_text_audio(file_path: str, include_asr: bool = True) -> str:
     if sidecar_subs:
         parts.append(sidecar_subs)
 
-    if include_asr:
+    if include_asr and not sidecar_subs:
         asr_text = run_audio_asr(file_path)
         if asr_text:
             parts.append(asr_text)
@@ -1182,7 +1237,7 @@ def extract_text_audio(file_path: str, include_asr: bool = True) -> str:
 
 
 def extract_text_video(file_path: str, include_asr: bool = True) -> str:
-    """Container metadata and subtitles, plus speech-to-text when `include_asr`."""
+    """Container metadata and subtitles, or speech-to-text when `include_asr` and there are none."""
     ext = Path(file_path).suffix.lower()
     parts: List[str] = [f"[Video {ext.lstrip('.').upper()}]"]
 
@@ -1215,7 +1270,7 @@ def extract_text_video(file_path: str, include_asr: bool = True) -> str:
     if sidecar_subs:
         parts.append(sidecar_subs)
 
-    if include_asr:
+    if include_asr and not sidecar_subs:
         asr_text = run_audio_asr(file_path)
         if asr_text:
             parts.append(asr_text)
